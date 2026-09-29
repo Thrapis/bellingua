@@ -1,0 +1,38 @@
+# bellingua configuration. Copy to bellingua.yaml (gitignored) and edit.
+# Every key is optional; the values below are the defaults unless noted.
+
+db: bellingua.db            # SQLite file (WAL mode: keep the -wal/-shm files next to it)
+listen: 127.0.0.1:7070      # keep it on localhost — there is no authentication
+logLevel: info              # debug | info | warn | error
+
+mt:
+  # Providers are tried in order for every string; the first success wins.
+  providers:
+    - name: lingvanex       # the bundled offline server, see the lingvanex section
+      url: http://127.0.0.1:8000
+      timeout: 5m
+  concurrency: 2            # parallel requests of a batch MT job; keep <= the server's INTER_THREADS
+
+lingvanex:
+  # "serve" starts third_party/lingvanex-server/server.py in the background
+  # (unless something already listens on the provider URL's port) and stops
+  # it on exit — even if bellingua crashes. Set false to run it yourself.
+  manage: true
+  workdir: third_party/lingvanex-server   # relative: working dir, then next to bellingua.exe
+  command: [py, ./server.py]              # default on Linux/macOS: [python3, ./server.py]
+  healthTimeout: 90s                      # importing ctranslate2 takes ~50 s on a laptop
+  stopTimeout: 10s
+
+backup:
+  interval: 15m             # automatic snapshot when there were edits (0 = only manual / on exit)
+  keep: 20                  # snapshots kept per target
+  # Local (or mounted / synced) folder. Not set by default.
+  # dir: D:/Backups/bellingua
+  # The VPS: only an SSH account is needed there. Not set by default.
+  # sftp:
+  #   host: vps.example.com
+  #   port: 22
+  #   user: backup
+  #   key: ~/.ssh/id_ed25519          # unencrypted private key (ssh-agent is not used)
+  #   knownHosts: ~/.ssh/known_hosts  # connect once with `ssh` first so the host key is recorded
+  #   dir: /home/backup/bellingua

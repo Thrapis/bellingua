@@ -1,0 +1,27 @@
+# binaries
+/bellingua
+/bellingua.exe
+/bellingua.exe~
+
+# local config and data (copy bellingua.example.yaml -> bellingua.yaml)
+/bellingua.yaml
+*.db
+*.db-wal
+*.db-shm
+*.db.bak
+*.db.restore*
+
+# embedded UI build output (produced by scripts/build.*)
+/internal/ui/dist/*
+!/internal/ui/dist/.gitkeep
+
+# machine-specific dev launch config
+/.claude/launch.json
+/.claude/settings.local.json
+
+# Lingvanex server: keep the scripts, ignore the model files (hundreds of MB)
+/third_party/lingvanex-server/*
+!/third_party/lingvanex-server/*.py
+!/third_party/lingvanex-server/*.bat
+!/third_party/lingvanex-server/*.txt
+!/third_party/lingvanex-server/*.md

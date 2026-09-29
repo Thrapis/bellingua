@@ -1,0 +1,3 @@
+# Python dependencies of server.py (tested with Python 3.12).
+ctranslate2==4.6.0
+sentencepiece==0.2.1
