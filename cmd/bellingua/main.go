@@ -48,6 +48,9 @@ var commands = map[string]func(ctx context.Context, args []string) error{
 // launched is set when bellingua runs without arguments (see main).
 var launched bool
 
+// version is set by release builds (-ldflags "-X main.version=v1.2.3").
+var version = "dev"
+
 func main() {
 	args := os.Args[1:]
 	// Without arguments (a double-click, a shortcut) bellingua runs the
@@ -63,6 +66,9 @@ func main() {
 	switch args[0] {
 	case "help", "-h", "-help", "--help":
 		usage()
+		return
+	case "version", "-version", "--version":
+		fmt.Println("bellingua", version)
 		return
 	}
 	if commands[args[0]] == nil {
@@ -120,6 +126,7 @@ commands:
   backup     snapshot the database to the configured targets
   restore    replace the database with a backup (server must be stopped)
   projects   list projects
+  version    print the version
 
 run "bellingua <command> -h" for the command's flags
 `)

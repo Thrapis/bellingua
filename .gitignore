@@ -3,6 +3,9 @@
 /bellingua.exe
 /bellingua.exe~
 
+# GoReleaser output
+/dist/
+
 # local config and data (copy bellingua.example.yaml -> bellingua.yaml)
 /bellingua.yaml
 *.db

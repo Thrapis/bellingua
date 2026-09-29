@@ -234,3 +234,25 @@ For benchmarks against a real DB, set `BELLINGUA_BENCH_DB=path\to.db` and run:
 ```powershell
 go test -bench . ./internal/store
 ```
+
+## Releasing
+
+Push a version tag:
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The `release` workflow then builds the UI, runs the checks and tests, and
+publishes a GitHub release through GoReleaser (`.goreleaser.yaml`). The release
+has an archive for Windows (zip), Linux and macOS (tar.gz), on amd64 and
+arm64, plus `checksums.txt`. Each archive holds the binary (UI embedded,
+version stamped, see `bellingua version`), this README, the licenses,
+`bellingua.example.yaml` and the MT server's scripts, without models. A tag
+like `v0.2.0-rc.1` makes a pre-release.
+
+## License
+
+[MIT](LICENSE). The Lingvanex models used for machine translation are not
+part of this repository and come with their own terms.

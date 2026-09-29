@@ -1,0 +1,51 @@
+# Release build: run by .github/workflows/release.yml on a v* tag. The web UI
+# must already be built into internal/ui/dist (the workflow does that first).
+# Local dry run: goreleaser release --snapshot --clean
+version: 2
+
+project_name: bellingua
+
+before:
+  hooks:
+    - sh -c "test -f internal/ui/dist/index.html || { echo 'internal/ui/dist is empty; build the web UI first' >&2; exit 1; }"
+
+builds:
+  - main: ./cmd/bellingua
+    binary: bellingua
+    env:
+      - CGO_ENABLED=0 # modernc SQLite is pure Go
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    goos: [windows, linux, darwin]
+    goarch: [amd64, arm64]
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    wrap_in_directory: true
+    files:
+      - README.md
+      - LICENSE
+      - bellingua.example.yaml
+      # The MT server's scripts only; its models are downloaded separately.
+      - third_party/lingvanex-server/server.py
+      - third_party/lingvanex-server/requirements.txt
+      - third_party/lingvanex-server/README.md
+      - third_party/lingvanex-server/start.bat
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^Merge "
+
+release:
+  prerelease: auto # v1.0.0-rc.1 and the like become pre-releases

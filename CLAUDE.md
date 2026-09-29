@@ -24,6 +24,7 @@ BELLINGUA_BENCH_DB=path/to.db go test -run x -bench . ./internal/store   # real-
 scripts/build.ps1   # (or build.sh) npm build in web/ -> copy web/out to internal/ui/dist -> go build bellingua.exe
 cd web && npx tsc --noEmit && npx eslint .   # frontend checks
 cd web && npm run dev                        # :3000, proxies /api to 127.0.0.1:7070 (BELLINGUA_API overrides)
+git tag vX.Y.Z && git push origin vX.Y.Z     # release: .github/workflows/release.yml -> GoReleaser (.goreleaser.yaml)
 ```
 
 Run without arguments (a double-click), bellingua `chdir`s to the exe's

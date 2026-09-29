@@ -97,7 +97,7 @@ func cmdServe(ctx context.Context, args []string) error {
 	hs := &http.Server{Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	url := "http://" + ln.Addr().String()
 	db, _ := filepath.Abs(e.cfg.DB)
-	e.log.Info("bellingua ready", "url", url, "db", db)
+	e.log.Info("bellingua ready", "version", version, "url", url, "db", db)
 	if launched {
 		e.log.Info("close this window or press Ctrl+C to stop")
 	}
