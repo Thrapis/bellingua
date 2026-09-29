@@ -31,6 +31,7 @@ jobs:
         working-directory: web
         run: |
           npm ci
+          npx next typegen # route types (LayoutProps…) that tsc needs on a fresh checkout
           npx tsc --noEmit
           npx eslint .
           npm run build
