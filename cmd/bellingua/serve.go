@@ -2,13 +2,16 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"time"
 
@@ -31,6 +34,16 @@ func cmdServe(ctx context.Context, args []string) error {
 	}
 	if *listen != "" {
 		e.cfg.Listen = *listen
+	}
+	// A second start (another double-click) finds the first one and, with
+	// -open, just brings up its editor.
+	if url := localURL(e.cfg.Listen); isBellingua(url) {
+		if !*open {
+			return fmt.Errorf("already running at %s", url)
+		}
+		e.log.Info("bellingua is already running; opening it", "url", url)
+		openBrowser(url)
+		return nil
 	}
 	st, err := openStore(ctx, e)
 	if err != nil {
@@ -83,7 +96,11 @@ func cmdServe(ctx context.Context, args []string) error {
 	}
 	hs := &http.Server{Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	url := "http://" + ln.Addr().String()
-	e.log.Info("bellingua ready", "url", url, "db", e.cfg.DB)
+	db, _ := filepath.Abs(e.cfg.DB)
+	e.log.Info("bellingua ready", "url", url, "db", db)
+	if launched {
+		e.log.Info("close this window or press Ctrl+C to stop")
+	}
 	if *open {
 		openBrowser(url)
 	}
@@ -120,6 +137,36 @@ func idleMaintenance(ctx context.Context, optimize func(context.Context)) {
 			optimize(ctx)
 		}
 	}
+}
+
+// localURL turns a listen address into a URL a browser on this machine can
+// open (":7070" and "0.0.0.0:7070" become 127.0.0.1).
+func localURL(listen string) string {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return "http://" + listen
+	}
+	if ip := net.ParseIP(host); host == "" || ip != nil && ip.IsUnspecified() {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port)
+}
+
+// isBellingua reports whether a bellingua server answers at url.
+func isBellingua(url string) bool {
+	c := http.Client{Timeout: time.Second}
+	resp, err := c.Get(url + "/api/info")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	var info map[string]json.RawMessage
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&info) != nil {
+		return false
+	}
+	_, states := info["states"]
+	_, checks := info["qaChecks"]
+	return states && checks
 }
 
 func openBrowser(url string) {

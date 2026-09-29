@@ -1,7 +1,8 @@
 // Command bellingua is a local translation workbench: an HTTP server with an
 // embedded web editor over a SQLite database, plus CLI import/export/backup.
 //
-//	bellingua serve
+//	bellingua                  (no arguments, e.g. a double-click: serve -open, data next to the exe)
+//	bellingua serve [-open]
 //	bellingua import  -project my-app -in <xliff-tree>
 //	bellingua import  -project my-app -in <xliff-en-tree> -extra   (reference language)
 //	bellingua export  -project my-app -out <dir> [-format xliff|crowdin-csv] [-min-state mt]
@@ -44,24 +45,72 @@ var commands = map[string]func(ctx context.Context, args []string) error{
 	"projects": cmdProjects,
 }
 
+// launched is set when bellingua runs without arguments (see main).
+var launched bool
+
 func main() {
-	if len(os.Args) < 2 || commands[os.Args[1]] == nil {
+	args := os.Args[1:]
+	// Without arguments (a double-click, a shortcut) bellingua runs the
+	// editor with its data next to the executable, whatever the working
+	// directory is.
+	launched = len(args) == 0
+	if launched {
+		args = []string{"serve", "-open"}
+		if err := chdirToExe(); err != nil {
+			fail("bellingua: %v\n", err)
+		}
+	}
+	switch args[0] {
+	case "help", "-h", "-help", "--help":
+		usage()
+		return
+	}
+	if commands[args[0]] == nil {
 		usage()
 		os.Exit(2)
 	}
-	name := os.Args[1]
+	name := args[0]
 	// SIGTERM also covers closing the console window on Windows, so the
 	// Lingvanex server and a final backup still get a clean shutdown.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, name, os.Args[2:]); err != nil {
-		fmt.Fprintf(os.Stderr, "bellingua %s: %v\n", name, err)
-		os.Exit(1)
+	if err := run(ctx, name, args[1:]); err != nil {
+		stop()
+		fail("bellingua %s: %v\n", name, err)
 	}
+}
+
+// fail prints the error and exits. When the process has a console window of
+// its own (started from Explorer), it waits for Enter first, or the window
+// would close before the error can be read.
+func fail(format string, a ...any) {
+	fmt.Fprintf(os.Stderr, format, a...)
+	if ownsConsole() {
+		fmt.Fprint(os.Stderr, "Press Enter to close.")
+		fmt.Scanln()
+	}
+	os.Exit(1)
+}
+
+// chdirToExe makes the executable's folder the working directory, so the
+// default bellingua.yaml, bellingua.db and relative paths in the config are
+// found there.
+func chdirToExe() error {
+	exe, err := os.Executable()
+	if err == nil {
+		exe, err = filepath.EvalSymlinks(exe)
+	}
+	if err != nil {
+		return err
+	}
+	return os.Chdir(filepath.Dir(exe))
 }
 
 func usage() {
 	fmt.Fprint(os.Stderr, `usage: bellingua <command> [flags]
+
+Without arguments, bellingua runs "serve -open" with bellingua.yaml and
+bellingua.db in the executable's folder.
 
 commands:
   serve      run the web editor

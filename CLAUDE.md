@@ -26,6 +26,12 @@ cd web && npx tsc --noEmit && npx eslint .   # frontend checks
 cd web && npm run dev                        # :3000, proxies /api to 127.0.0.1:7070 (BELLINGUA_API overrides)
 ```
 
+Run without arguments (a double-click), bellingua `chdir`s to the exe's
+folder and runs `serve -open`. `serve` first checks `/api/info` on its
+address, and if bellingua already answers there, `-open` just opens that
+instance. Errors wait for Enter only when the process owns its console
+(`console_windows.go`), so terminal use never blocks.
+
 The Windows exe icon comes from `cmd/bellingua/rsrc_windows_*.syso`, which
 `go build` links automatically. They are generated from
 `cmd/bellingua/winres/` (small design at 16–48 px, detailed one from 64 px)

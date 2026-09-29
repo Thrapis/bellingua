@@ -130,7 +130,13 @@ exports **XLIFF 1.2** (markup as locked `<ph>` tags) and **Crowdin CSV**
 
 ## Quick start
 
-Download or build `bellingua.exe`, then:
+Download or build `bellingua.exe` and double-click it. The editor opens in
+your browser, and the console window shows the log; close it to stop
+bellingua. Double-clicking again while it runs just opens the editor again.
+Started this way, bellingua keeps `bellingua.db` (and reads `bellingua.yaml`)
+in the exe's folder. Import your files from the project menu.
+
+From a terminal, the same works with explicit commands:
 
 ```powershell
 bellingua import -project my-app -in "C:\path\to\xliff"
@@ -179,7 +185,8 @@ keeps the previous database as `bellingua.db.bak`.
 
 | Command | |
 |---|---|
-| `serve [-listen addr] [-open]` | web editor + API |
+| *(no arguments)* | `serve -open` with the data in the exe's folder (a double-click) |
+| `serve [-listen addr] [-open]` | web editor + API; if bellingua already runs there, `-open` just opens it |
 | `import -project P -in DIR [-format xliff\|crowdin-csv] [-source-lang en -target-lang de]` | import or re-import a tree; creates the project if needed (languages default to the XLIFF header) |
 | `export -project P -out DIR [-format …] [-min-state mt\|translated\|approved]` | export a tree mirroring the import |
 | `qa -project P` | recompute QA for all units (after changing checks) |
