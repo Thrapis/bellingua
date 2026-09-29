@@ -26,6 +26,13 @@ cd web && npx tsc --noEmit && npx eslint .   # frontend checks
 cd web && npm run dev                        # :3000, proxies /api to 127.0.0.1:7070 (BELLINGUA_API overrides)
 ```
 
+The Windows exe icon comes from `cmd/bellingua/rsrc_windows_*.syso`, which
+`go build` links automatically. They are generated from
+`cmd/bellingua/winres/` (small design at 16–48 px, detailed one from 64 px)
+and committed. They don't update themselves: regenerate them after changing
+any icon PNG, or the exe keeps the old icon:
+`cd cmd/bellingua && go run github.com/tc-hib/go-winres@v0.3.3 make --in winres/winres.json --out rsrc --arch amd64,arm64`.
+
 `web/go.mod` exists only so `./...` skips `web/node_modules` (one npm package
 ships Go files). Don't remove it. `internal/ui/dist` holds the embedded build
 output and is gitignored except `.gitkeep`. Without a UI build, the server runs
