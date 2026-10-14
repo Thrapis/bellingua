@@ -45,6 +45,20 @@ ships Go files). Don't remove it. `internal/ui/dist` holds the embedded build
 output and is gitignored except `.gitkeep`. Without a UI build, the server runs
 API-only and `/` explains how to build.
 
+## Working rules
+
+The global rules (`~/.claude/CLAUDE.md`) apply. This project adds:
+
+- **Never touch:**
+  - `bellingua.db*` is the real corpus. Tests use fixtures or a temp DB; only the benchmarks read it,
+    through `BELLINGUA_BENCH_DB`, and read-only.
+  - Existing migration files. Add a new migration instead.
+- **Invariants as tests.** Go/TS `splitTarget` parity, the XLIFF byte-identical round trip and
+  `source_hash` kept current should end up as tests, not just prose.
+- **Hot paths.** If you touch list/search/count queries, `Filter.where`, the importer or `tm`,
+  run the relevant benchmark and `EXPLAIN QUERY PLAN` and report the numbers.
+- **Checks** are the ones in Commands: Go build, vet, test, `gofmt -l`; web `tsc --noEmit`, `eslint`.
+
 ## Architecture
 
 ### Store (`internal/store`)

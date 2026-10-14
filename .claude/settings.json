@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(/bellingua.db*)",
+      "Edit(/bellingua.db*)",
+      "Write(/bellingua.db*)"
+    ],
+    "ask": [
+      "Bash(git push:*)",
+      "Bash(git tag:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(rm -rf:*)",
+      "Bash(sqlite3:*)",
+      "Bash(go get:*)",
+      "Bash(npm install:*)",
+      "Bash(npm i:*)",
+      "Edit(/go.mod)",
+      "Edit(/web/package.json)",
+      "Edit(/.github/**)",
+      "Write(/.github/**)",
+      "Edit(/.goreleaser.yaml)",
+      "Edit(/internal/store/schema*.sql)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "gofmt -l -w cmd internal"
+          }
+        ]
+      }
+    ]
+  }
+}
