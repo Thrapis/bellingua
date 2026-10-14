@@ -1,0 +1,49 @@
+# Runs the same checks as the release workflow on every push, so problems show up
+# when they are introduced and not when a version tag is pushed.
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Web UI checks and build
+        working-directory: web
+        run: |
+          npm ci
+          npx next typegen # route types (LayoutProps…) that tsc needs on a fresh checkout
+          npx tsc --noEmit
+          npx eslint .
+          npm run build
+
+      - name: Embed the web UI
+        run: cp -r web/out/. internal/ui/dist/
+
+      - name: Go checks
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test ./...
