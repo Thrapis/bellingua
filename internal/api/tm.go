@@ -24,10 +24,23 @@ func (s *Server) unitTM(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	ctx := r.Context()
-	u, err := s.st.Unit(ctx, id, false)
+	out, err := s.tmMatches(r.Context(), id)
 	if err != nil {
 		return err
+	}
+	return ok(w, out)
+}
+
+// tmResponse is a unit's translation-memory suggestions.
+type tmResponse struct {
+	Matches    []tmSuggestion `json:"matches"`
+	Duplicates int            `json:"duplicates"` // identical strings without a human translation
+}
+
+func (s *Server) tmMatches(ctx context.Context, id int64) (tmResponse, error) {
+	u, err := s.st.Unit(ctx, id, false)
+	if err != nil {
+		return tmResponse{}, err
 	}
 	src := model.Plain(u.Source)
 
@@ -35,7 +48,7 @@ func (s *Server) unitTM(w http.ResponseWriter, r *http.Request) error {
 	seen := map[string]bool{} // translations already offered
 	exact, err := s.st.ExactMatches(ctx, u.ProjectID, u.ID, src, tmLimit)
 	if err != nil {
-		return err
+		return tmResponse{}, err
 	}
 	for _, m := range exact {
 		seen[model.Plain(m.Target)] = true
@@ -45,7 +58,7 @@ func (s *Server) unitTM(w http.ResponseWriter, r *http.Request) error {
 	if len(out) < tmLimit {
 		ix, err := s.tm.Get(ctx, u.ProjectID)
 		if err != nil {
-			return err
+			return tmResponse{}, err
 		}
 		fuzzy := ix.Search(u.Source, u.ID, tmLimit*2)
 		ids := make([]int64, len(fuzzy))
@@ -54,7 +67,7 @@ func (s *Server) unitTM(w http.ResponseWriter, r *http.Request) error {
 		}
 		rows, err := s.st.TMUnits(ctx, ids)
 		if err != nil {
-			return err
+			return tmResponse{}, err
 		}
 		byID := map[int64]store.TMRow{}
 		for _, r := range rows {
@@ -75,9 +88,9 @@ func (s *Server) unitTM(w http.ResponseWriter, r *http.Request) error {
 
 	dups, err := s.st.PendingDuplicates(ctx, u.ProjectID, u.ID, src)
 	if err != nil {
-		return err
+		return tmResponse{}, err
 	}
-	return ok(w, map[string]any{"matches": out, "duplicates": len(dups)})
+	return tmResponse{Matches: out, Duplicates: len(dups)}, nil
 }
 
 // propagate copies a unit's human translation to every identical string
@@ -87,25 +100,34 @@ func (s *Server) propagate(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	ctx := r.Context()
-	u, err := s.st.Unit(ctx, id, false)
+	n, err := s.propagateFrom(r.Context(), id)
 	if err != nil {
 		return err
 	}
+	return ok(w, map[string]int{"changed": n})
+}
+
+// propagateFrom applies unit id's translation to its pending duplicates and
+// returns how many changed.
+func (s *Server) propagateFrom(ctx context.Context, id int64) (int, error) {
+	u, err := s.st.Unit(ctx, id, false)
+	if err != nil {
+		return 0, err
+	}
 	if u.Target == nil || u.State < model.Translated {
-		return badRequest("the string has no human translation to propagate")
+		return 0, badRequest("the string has no human translation to propagate")
 	}
 	p, err := s.st.Project(ctx, u.ProjectID)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	runner, _, err := s.runner(ctx, p)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	ids, err := s.st.PendingDuplicates(ctx, u.ProjectID, u.ID, model.Plain(u.Source))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	target := model.Plain(u.Target)
 	n := 0
@@ -115,12 +137,12 @@ func (s *Server) propagate(w http.ResponseWriter, r *http.Request) error {
 			continue
 		}
 		if err != nil {
-			return err
+			return 0, err
 		}
 		s.tm.Update(u.ProjectID, saved.ID, saved.Source, true)
 		n++
 	}
-	return ok(w, map[string]int{"changed": n})
+	return n, nil
 }
 
 // tmFillJob fills every untranslated/machine string matching the filter

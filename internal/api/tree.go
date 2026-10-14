@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"path"
 	"sort"
@@ -23,7 +24,7 @@ type treeCache struct {
 	children map[string][]TreeNode // folder path -> immediate children (folders first)
 }
 
-func (s *Server) treeFor(r *http.Request, projectID int64) (*treeCache, error) {
+func (s *Server) treeFor(ctx context.Context, projectID int64) (*treeCache, error) {
 	rev := s.st.Rev()
 	s.treeMu.Lock()
 	c := s.trees[projectID]
@@ -31,7 +32,7 @@ func (s *Server) treeFor(r *http.Request, projectID int64) (*treeCache, error) {
 	if c != nil && c.rev == rev {
 		return c, nil
 	}
-	files, err := s.st.Files(r.Context(), projectID)
+	files, err := s.st.Files(ctx, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -103,17 +104,26 @@ func (s *Server) tree(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	c, err := s.treeFor(r, p.ID)
+	dir := strings.Trim(r.URL.Query().Get("dir"), "/")
+	kids, err := s.treeChildren(r.Context(), p.ID, dir)
 	if err != nil {
 		return err
 	}
-	dir := strings.Trim(r.URL.Query().Get("dir"), "/")
+	return ok(w, map[string]any{"dir": dir, "children": kids})
+}
+
+// treeChildren lists a folder's immediate children ("" is the root).
+func (s *Server) treeChildren(ctx context.Context, projectID int64, dir string) ([]TreeNode, error) {
+	c, err := s.treeFor(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
 	kids, found := c.children[dir]
 	if !found {
-		return store.ErrNotFound
+		return nil, store.ErrNotFound
 	}
 	if kids == nil {
 		kids = []TreeNode{}
 	}
-	return ok(w, map[string]any{"dir": dir, "children": kids})
+	return kids, nil
 }

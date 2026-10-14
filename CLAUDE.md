@@ -274,6 +274,28 @@ the pieces are recovered with `model.SplitTarget`:
     `index.html`.
   - `_next/static` is served as immutable.
 
+### MCP (`api/mcp.go`, `cmd/bellingua/mcp.go`)
+
+- **Endpoint**: `/mcp` in `serve` (Streamable HTTP, official
+  `modelcontextprotocol/go-sdk`). The tools live in package `api` and call the
+  same cores as the HTTP handlers (`save`, `tmMatches`, `translateUnit`,
+  `propagateFrom`, `addTerm`/`editTerm`/`removeTerm`, `startQA`,
+  `treeChildren`, `filterLists`, `parseCursor`). A new write path belongs in
+  such a core, so the TM index, QA and `glossaryChanged` stay in step.
+- **Agent view**: tools exchange plain strings plus a `codes` list, and state and
+  QA ids as names, not the UI's piece arrays and masks.
+- **Write guard**: `save_translation` saves with `Origin: "ai"` and
+  `IfBelow: Translated`, and only accepts the states `translated`/`mt`, so it
+  never changes human work. Glossary tools are full CRUD. Import, export,
+  bulk changes, settings, batch MT, TM fill and backup are deliberately not
+  tools.
+- **Guards**: the SDK refuses a non-local `Host` (DNS rebinding), and
+  `http.CrossOriginProtection` refuses cross-site browser requests.
+- **`bellingua mcp`**: a stdio relay for process-based clients. It connects as
+  a client to a running serve's `/mcp`, mirrors its tools and forwards calls.
+  It never opens the DB. It reports errors without `fail()`'s "Press Enter",
+  which would read the client's stdin.
+
 ### Frontend (`web/`)
 
 - **Setup**: Next.js 16 app router, React Compiler, shadcn/ui on **Radix**
