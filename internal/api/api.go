@@ -140,9 +140,17 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle("/", spa(s.static))
 	}
 
+	// Reject cross-origin unsafe requests, so a web page can't drive the API
+	// with CORS-"simple" POSTs. The Next dev proxy rewrites Host but forwards
+	// the browser's Sec-Fetch-Site: same-origin, so it needs no trusted origin.
+	csrf := http.NewCrossOriginProtection()
+	csrf.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusForbidden, "cross-origin request refused", nil)
+	}))
+
 	gz, _ := gzhttp.NewWrapper(gzhttp.MinSize(1024), gzhttp.CompressionLevel(1),
 		gzhttp.ExceptContentTypes([]string{"text/event-stream"}))
-	return gz(mux)
+	return gz(csrf.Handler(mux))
 }
 
 // --- helpers -----------------------------------------------------------------
