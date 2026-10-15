@@ -2,6 +2,7 @@
 /bellingua
 /bellingua.exe
 /bellingua.exe~
+/bin/
 
 # GoReleaser output
 /dist/
