@@ -280,6 +280,27 @@ type mcpMT struct {
 
 type mcpTermOut = glossary.Term
 
+// MCP structured content must be a JSON object, so list results are wrapped.
+type mcpProjects struct {
+	Projects []mcpProject `json:"projects"`
+}
+
+type mcpLangs struct {
+	Langs []mcpLang `json:"langs"`
+}
+
+type mcpTerms struct {
+	Terms []glossary.Term `json:"terms"`
+}
+
+type mcpForms struct {
+	Forms []glossary.FormCount `json:"forms"`
+}
+
+type mcpJobs struct {
+	Jobs []Job `json:"jobs"`
+}
+
 func plainPtr(ps []model.Piece) *string {
 	if ps == nil {
 		return nil
@@ -326,9 +347,9 @@ func (s *Server) mcpTools(srv *mcp.Server) {
 			if err != nil {
 				return nil, err
 			}
-			out := []mcpProject{}
+			out := mcpProjects{Projects: []mcpProject{}}
 			for _, p := range ps {
-				out = append(out, mcpProject{ID: p.ID, Name: p.Name, SourceLang: p.SourceLang, TargetLang: p.TargetLang, Files: p.Files, Counts: p.Counts})
+				out.Projects = append(out.Projects, mcpProject{ID: p.ID, Name: p.Name, SourceLang: p.SourceLang, TargetLang: p.TargetLang, Files: p.Files, Counts: p.Counts})
 			}
 			return out, nil
 		})
@@ -426,9 +447,9 @@ func (s *Server) mcpTools(srv *mcp.Server) {
 			if err != nil {
 				return nil, err
 			}
-			out := []mcpLang{}
+			out := mcpLangs{Langs: []mcpLang{}}
 			for _, l := range ls {
-				out = append(out, mcpLang{Lang: l.Lang, Target: plainPtr(l.Target), State: l.State.String(), Outdated: l.Outdated})
+				out.Langs = append(out.Langs, mcpLang{Lang: l.Lang, Target: plainPtr(l.Target), State: l.State.String(), Outdated: l.Outdated})
 			}
 			return out, nil
 		})
@@ -479,11 +500,11 @@ func (s *Server) mcpTools(srv *mcp.Server) {
 			if err != nil {
 				return nil, err
 			}
-			out := []glossary.Term{}
+			out := mcpTerms{Terms: []glossary.Term{}}
 			q := strings.ToLower(in.Contains)
 			for _, t := range terms {
 				if q == "" || strings.Contains(strings.ToLower(t.Source), q) || strings.Contains(strings.ToLower(t.Target), q) {
-					out = append(out, t)
+					out.Terms = append(out.Terms, t)
 				}
 			}
 			return out, nil
@@ -504,7 +525,7 @@ func (s *Server) mcpTools(srv *mcp.Server) {
 			if forms == nil {
 				forms = []glossary.FormCount{}
 			}
-			return forms, err
+			return mcpForms{Forms: forms}, err
 		})
 
 	tool(s, srv, &mcp.Tool{Name: "create_term", Annotations: writes,
@@ -540,7 +561,13 @@ func (s *Server) mcpTools(srv *mcp.Server) {
 
 	tool(s, srv, &mcp.Tool{Name: "list_jobs", Annotations: readOnly,
 		Description: "Lists recent background jobs (import, export, MT, QA, backup) and their progress."},
-		func(ctx context.Context, _ struct{}) (any, error) { return s.jobs.List(), nil })
+		func(ctx context.Context, _ struct{}) (any, error) {
+			jobs := s.jobs.List()
+			if jobs == nil {
+				jobs = []Job{}
+			}
+			return mcpJobs{Jobs: jobs}, nil
+		})
 
 	tool(s, srv, &mcp.Tool{Name: "get_job", Annotations: readOnly,
 		Description: "Returns one background job's status and result."},

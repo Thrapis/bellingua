@@ -34,6 +34,10 @@ func call(t *testing.T, cs *mcp.ClientSession, name string, args map[string]any,
 	if err != nil {
 		t.Fatalf("%s: %v", name, err)
 	}
+	// MCP clients reject structured content that is not a JSON object.
+	if _, ok := res.StructuredContent.(map[string]any); res.StructuredContent != nil && !ok {
+		t.Errorf("%s: structuredContent is %T, want a JSON object", name, res.StructuredContent)
+	}
 	var text string
 	for _, c := range res.Content {
 		if tc, ok := c.(*mcp.TextContent); ok {
@@ -75,8 +79,9 @@ func TestMCPToolList(t *testing.T) {
 func TestMCPListAndGet(t *testing.T) {
 	cs, _, p := newMCP(t)
 
-	var projects []mcpProject
-	call(t, cs, "list_projects", nil, &projects)
+	var res mcpProjects
+	call(t, cs, "list_projects", nil, &res)
+	projects := res.Projects
 	if len(projects) != 1 || projects[0].ID != p.ID || projects[0].Counts.Total != 2 {
 		t.Fatalf("projects = %+v", projects)
 	}
@@ -211,13 +216,13 @@ func TestMCPTerms(t *testing.T) {
 	if text, isErr := call(t, cs, "create_term", map[string]any{"project": p.ID, "source": "нажмите", "target": "націсніце"}, &term); isErr {
 		t.Fatalf("create: %s", text)
 	}
-	var terms []mcpTermOut
+	var terms mcpTerms
 	call(t, cs, "list_terms", map[string]any{"project": p.ID, "contains": "нажм"}, &terms)
-	if len(terms) != 1 || terms[0].ID != term.ID {
+	if len(terms.Terms) != 1 || terms.Terms[0].ID != term.ID {
 		t.Errorf("terms = %+v", terms)
 	}
 	call(t, cs, "list_terms", map[string]any{"project": p.ID, "contains": "zzz"}, &terms)
-	if len(terms) != 0 {
+	if len(terms.Terms) != 0 {
 		t.Errorf("filtered terms = %+v", terms)
 	}
 
@@ -239,7 +244,7 @@ func TestMCPTerms(t *testing.T) {
 		t.Errorf("delete: %s", text)
 	}
 	call(t, cs, "list_terms", map[string]any{"project": p.ID}, &terms)
-	if len(terms) != 0 {
+	if len(terms.Terms) != 0 {
 		t.Errorf("after delete = %+v", terms)
 	}
 }
