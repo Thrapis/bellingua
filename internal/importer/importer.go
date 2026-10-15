@@ -283,6 +283,9 @@ type writer struct {
 	fileIDs   map[string]int64
 	existing  map[int64]bool // files that already had units before this import
 	ins, upd  *sql.Stmt
+	// hbase and hchg record a re-import's real changes in the history feed.
+	hbase, hchg *sql.Stmt
+	batch       string
 }
 
 func newWriter(ctx context.Context, tx *sql.Tx, projectID int64, runner *qa.Runner) (*writer, error) {
@@ -316,6 +319,15 @@ func newWriter(ctx context.Context, tx *sql.Tx, projectID int64, runner *qa.Runn
 		target_pieces = ?, context = ?, state = ?, qa = ?, changed = ?, obsolete = 0, updated_at = ?, source_hash = ? WHERE id = ?`); err != nil {
 		return nil, err
 	}
+	if w.hbase, err = tx.PrepareContext(ctx, `INSERT INTO history (unit_id, project_id, target, state, origin, at)
+		SELECT ?, ?, ?, ?, 'import', ? WHERE NOT EXISTS (SELECT 1 FROM history WHERE unit_id = ?)`); err != nil {
+		return nil, err
+	}
+	if w.hchg, err = tx.PrepareContext(ctx, `INSERT INTO history (unit_id, project_id, target, state, origin, at, old_target, old_state, batch)
+		VALUES (?, ?, ?, ?, 'import', ?, ?, ?, ?)`); err != nil {
+		return nil, err
+	}
+	w.batch = fmt.Sprintf("import-%d", w.now)
 	return w, nil
 }
 
@@ -334,6 +346,12 @@ func (w *writer) close() {
 	}
 	if w.upd != nil {
 		w.upd.Close()
+	}
+	if w.hbase != nil {
+		w.hbase.Close()
+	}
+	if w.hchg != nil {
+		w.hchg.Close()
 	}
 }
 
@@ -396,6 +414,7 @@ type existingUnit struct {
 	source            string
 	target            sql.NullString
 	targetPieces      []byte
+	updatedAt         int64
 	context           string
 	state             model.State
 	mask              qa.Check
@@ -404,7 +423,7 @@ type existingUnit struct {
 }
 
 func (w *writer) merge(fileID int64, r parsed, stats *Stats) error {
-	rows, err := w.tx.QueryContext(w.ctx, `SELECT id, key, ord, source, target, target_pieces, context, state, qa, changed, obsolete
+	rows, err := w.tx.QueryContext(w.ctx, `SELECT id, key, ord, source, target, target_pieces, context, state, qa, changed, obsolete, updated_at
 		FROM units WHERE file_id = ?`, fileID)
 	if err != nil {
 		return err
@@ -413,7 +432,7 @@ func (w *writer) merge(fileID int64, r parsed, stats *Stats) error {
 	for rows.Next() {
 		var key string
 		e := &existingUnit{}
-		if err := rows.Scan(&e.id, &key, &e.ord, &e.source, &e.target, &e.targetPieces, &e.context, &e.state, &e.mask, &e.changed, &e.obsolete); err != nil {
+		if err := rows.Scan(&e.id, &key, &e.ord, &e.source, &e.target, &e.targetPieces, &e.context, &e.state, &e.mask, &e.changed, &e.obsolete, &e.updatedAt); err != nil {
 			rows.Close()
 			return err
 		}
@@ -471,6 +490,11 @@ func (w *writer) merge(fileID int64, r parsed, stats *Stats) error {
 			anyEq(tgt, e.target) && state == e.state && changed == e.changed && mask == e.mask {
 			continue
 		}
+		if !anyEq(tgt, e.target) || state != e.state {
+			if err := w.record(e, tgt, state); err != nil {
+				return err
+			}
+		}
 		if _, err := w.upd.ExecContext(w.ctx, i, src, model.EncodePieces(u.src), tgt, tgtBlob, context,
 			state, mask, changed, w.now, store.SourceHash(src), e.id); err != nil {
 			return err
@@ -486,6 +510,16 @@ func (w *writer) merge(fileID int64, r parsed, stats *Stats) error {
 		}
 	}
 	return nil
+}
+
+// record writes the history of a re-import that changed a unit's target or
+// state: the imported baseline for a never-touched unit, then the change.
+func (w *writer) record(e *existingUnit, tgt any, state model.State) error {
+	if _, err := w.hbase.ExecContext(w.ctx, e.id, w.projectID, nullToAny(e.target), e.state, e.updatedAt, e.id); err != nil {
+		return err
+	}
+	_, err := w.hchg.ExecContext(w.ctx, e.id, w.projectID, tgt, state, w.now, nullToAny(e.target), e.state, w.batch)
+	return err
 }
 
 // qaMask reuses the mask computed by the parser when the stored target is

@@ -324,7 +324,8 @@ func (s *Store) countFromFiles(ctx context.Context, f Filter) (int64, error) {
 	return n, err
 }
 
-// HistoryEntry is one recorded change.
+// HistoryEntry is one recorded change. Origin is import | edit | mt | tm | ai |
+// bulk; an MCP agent (ai) and machine translation (mt) are different actors.
 type HistoryEntry struct {
 	Target *string     `json:"target"`
 	State  model.State `json:"state"`
@@ -421,6 +422,8 @@ type Save struct {
 	// this origin, so a writer can revise its own earlier save but nothing
 	// else (an import has no history entry and stays protected).
 	RedoOrigin string
+	// Batch ties the history rows of one operation (a job, a bulk change) together.
+	Batch string
 }
 
 // ErrSkipped is returned by SaveUnit when Save.IfBelow rejected the save.
@@ -474,9 +477,9 @@ func (s *Store) SaveUnit(ctx context.Context, id int64, sv Save, runner *qa.Runn
 		now := time.Now().Unix()
 		// Keep the pre-edit value the first time a unit is touched, so the
 		// imported translation is never lost from history.
-		if _, err := tx.ExecContext(ctx, `INSERT INTO history (unit_id, target, state, origin, at)
-			SELECT ?, ?, ?, 'import', ? WHERE NOT EXISTS (SELECT 1 FROM history WHERE unit_id = ?)`,
-			id, nullStr(oldPlain), u.State, u.UpdatedAt, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO history (unit_id, project_id, target, state, origin, at)
+			SELECT ?, ?, ?, ?, 'import', ? WHERE NOT EXISTS (SELECT 1 FROM history WHERE unit_id = ?)`,
+			id, u.ProjectID, nullStr(oldPlain), u.State, u.UpdatedAt, id); err != nil {
 			return err
 		}
 		mask := runner.Mask(qa.Unit{Source: u.Source, Target: pieces, State: state})
@@ -485,8 +488,9 @@ func (s *Store) SaveUnit(ctx context.Context, id int64, sv Save, runner *qa.Runn
 			nullStr(sv.Target), model.EncodePieces(pieces), state, mask, now, id); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO history (unit_id, target, state, origin, at) VALUES (?, ?, ?, ?, ?)`,
-			id, nullStr(sv.Target), state, sv.Origin, now); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO history (unit_id, project_id, target, state, origin, at, old_target, old_state, batch)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, u.ProjectID, nullStr(sv.Target), state, sv.Origin, now, nullStr(oldPlain), u.State, nullIfEmpty(sv.Batch)); err != nil {
 			return err
 		}
 		u.Target, u.State, u.QA, u.Changed, u.UpdatedAt = pieces, state, mask, false, now
@@ -503,6 +507,13 @@ func eqStr(a, b *string) bool {
 	return *a == *b
 }
 
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
 func nullStr(s *string) any {
 	if s == nil {
 		return nil
@@ -512,7 +523,8 @@ func nullStr(s *string) any {
 
 // SetState moves every unit matching f (that has a translation) to state.
 // With noErrors, units with a QA error are skipped. Returns the count.
-func (s *Store) SetState(ctx context.Context, f Filter, state model.State, noErrors bool) (int64, error) {
+// batch (may be empty) is recorded on the history rows.
+func (s *Store) SetState(ctx context.Context, f Filter, state model.State, noErrors bool, batch string) (int64, error) {
 	where, args := f.where()
 	where += " AND u.target IS NOT NULL AND u.state <> ?"
 	args = append(args, state)
@@ -524,14 +536,14 @@ func (s *Store) SetState(ctx context.Context, f Filter, state model.State, noErr
 		now := time.Now().Unix()
 		// History first (the filter still sees the old state): the imported
 		// baseline for never-touched units, then the bulk change itself.
-		if _, err := tx.ExecContext(ctx, `INSERT INTO history (unit_id, target, state, origin, at)
-			SELECT u.id, u.target, u.state, 'import', u.updated_at FROM units u WHERE `+where+`
+		if _, err := tx.ExecContext(ctx, `INSERT INTO history (unit_id, project_id, target, state, origin, at)
+			SELECT u.id, u.project_id, u.target, u.state, 'import', u.updated_at FROM units u WHERE `+where+`
 			AND NOT EXISTS (SELECT 1 FROM history h WHERE h.unit_id = u.id)`, args...); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO history (unit_id, target, state, origin, at)
-			SELECT u.id, u.target, ?, 'bulk', ? FROM units u WHERE `+where,
-			append([]any{state, now}, args...)...); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO history (unit_id, project_id, target, state, origin, at, old_target, old_state, batch)
+			SELECT u.id, u.project_id, u.target, ?, 'bulk', ?, u.target, u.state, ? FROM units u WHERE `+where,
+			append([]any{state, now, nullIfEmpty(batch)}, args...)...); err != nil {
 			return err
 		}
 		res, err := tx.ExecContext(ctx, "UPDATE units SET state = ?, updated_at = ? WHERE id IN (SELECT u.id FROM units u WHERE "+where+")",

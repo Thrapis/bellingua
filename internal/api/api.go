@@ -106,6 +106,8 @@ func (s *Server) Handler() http.Handler {
 	h("GET /api/projects/{pid}/units", s.listUnits)
 	h("GET /api/projects/{pid}/count", s.countUnits)
 	h("POST /api/projects/{pid}/bulk", s.bulk)
+	h("GET /api/projects/{pid}/history/days", s.historyDays)
+	h("GET /api/projects/{pid}/history", s.historyList)
 	h("POST /api/projects/{pid}/qa", s.qaJob)
 	h("POST /api/projects/{pid}/mt", s.mtJob)
 	h("POST /api/projects/{pid}/import", s.importJob)
@@ -672,7 +674,7 @@ func (s *Server) bulk(w http.ResponseWriter, r *http.Request) error {
 	if body.State == model.Untranslated {
 		return badRequest("bulk state must be mt, translated or approved")
 	}
-	n, err := s.st.SetState(r.Context(), f, body.State, body.NoErrors)
+	n, err := s.st.SetState(r.Context(), f, body.State, body.NoErrors, store.NewBatch("bulk"))
 	if err != nil {
 		return err
 	}

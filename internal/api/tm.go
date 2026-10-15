@@ -131,8 +131,9 @@ func (s *Server) propagateFrom(ctx context.Context, id int64) (int, error) {
 	}
 	target := model.Plain(u.Target)
 	n := 0
+	batch := store.NewBatch("tm")
 	for _, dup := range ids {
-		saved, err := s.st.SaveUnit(ctx, dup, store.Save{Target: &target, State: model.Translated, Origin: "tm", IfBelow: model.Translated}, runner)
+		saved, err := s.st.SaveUnit(ctx, dup, store.Save{Target: &target, State: model.Translated, Origin: "tm", IfBelow: model.Translated, Batch: batch}, runner)
 		if errors.Is(err, store.ErrSkipped) {
 			continue
 		}
@@ -167,9 +168,10 @@ func (s *Server) tmFillJob(w http.ResponseWriter, r *http.Request) error {
 			return nil, err
 		}
 		n := 0
+		batch := store.NewBatch("tm")
 		for i, c := range cands {
 			t := c.Target
-			_, err := s.st.SaveUnit(ctx, c.UnitID, store.Save{Target: &t, State: model.Translated, Origin: "tm", IfBelow: model.Translated}, runner)
+			_, err := s.st.SaveUnit(ctx, c.UnitID, store.Save{Target: &t, State: model.Translated, Origin: "tm", IfBelow: model.Translated, Batch: batch}, runner)
 			switch {
 			case errors.Is(err, store.ErrSkipped):
 			case err != nil:

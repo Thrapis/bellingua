@@ -22,6 +22,7 @@ import {
   RotateCcw,
   Sparkles,
   TriangleAlert,
+  Undo2,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -309,6 +310,11 @@ export function UnitPanel({ unitId, row, draft, onDraft, actions, mtEnabled, mtS
             <Button size="sm" variant="secondary" onClick={() => doSave("approved")} disabled={!ready || !!check?.mismatch}>
               <CheckCheck /> Approve <Kbd>Ctrl+Shift+Enter</Kbd>
             </Button>
+            {u?.state === "approved" && !dirty && (
+              <Button size="sm" variant="ghost" onClick={() => doSave("translated")} disabled={!ready}>
+                <Undo2 /> Un-approve
+              </Button>
+            )}
             <div className="flex-1" />
             {dirty && (
               <IconButton label="Revert to saved" onClick={() => apply(plain(savedTgt))}>

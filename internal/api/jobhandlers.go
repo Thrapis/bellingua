@@ -154,6 +154,7 @@ func (s *Server) mtJob(w http.ResponseWriter, r *http.Request) error {
 			return nil, err
 		}
 		pr.Set(0, total)
+		batch := store.NewBatch("mt")
 
 		type item struct {
 			id  int64
@@ -179,7 +180,7 @@ func (s *Server) mtJob(w http.ResponseWriter, r *http.Request) error {
 							tgt = glossary.Unpin(tgt, repl)
 						}
 						t := model.Plain(tgt)
-						_, err = s.st.SaveUnit(ctx, it.id, store.Save{Target: &t, State: model.MT, Origin: "mt", IfBelow: ifBelow}, runner)
+						_, err = s.st.SaveUnit(ctx, it.id, store.Save{Target: &t, State: model.MT, Origin: "mt", IfBelow: ifBelow, Batch: batch}, runner)
 					}
 					switch {
 					case err == nil:
