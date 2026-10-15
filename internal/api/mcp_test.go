@@ -183,9 +183,10 @@ func TestMCPSaveGuard(t *testing.T) {
 	}
 }
 
-// Only the agent's own saves can be revised: a human's translated (not just
-// approved) text, a TM fill and an import stay protected.
-func TestMCPOverwriteOwnOnly(t *testing.T) {
+// The agent may overwrite anything below approved, including a human's
+// translated text (the old text stays in the unit's history), but never an
+// approved one.
+func TestMCPOverwriteTranslated(t *testing.T) {
 	cs, ts, p := newMCP(t)
 	var page mcpPage
 	call(t, cs, "list_units", map[string]any{"project": p.ID}, &page)
@@ -194,19 +195,25 @@ func TestMCPOverwriteOwnOnly(t *testing.T) {
 	if res, b := do(t, ts, "PUT", "/api/units/"+itoa(id), map[string]any{"target": "Так", "state": "translated"}); res.StatusCode != http.StatusOK {
 		t.Fatalf("human save: %d %s", res.StatusCode, b)
 	}
-	if text, isErr := call(t, cs, "save_translation", map[string]any{"id": id, "target": "Не"}, nil); !isErr || !strings.Contains(text, "not changed") {
-		t.Errorf("human translated text overwritten: %v %s", isErr, text)
+	var u mcpUnit
+	if text, isErr := call(t, cs, "save_translation", map[string]any{"id": id, "target": "Не"}, &u); isErr || *u.Target != "Не" || u.State != "translated" {
+		t.Fatalf("human translated text not overwritten: %v %s", isErr, text)
+	}
+	call(t, cs, "get_unit", map[string]any{"id": id, "history": true}, &u)
+	var kept bool
+	for _, h := range u.History {
+		kept = kept || (h.Target != nil && *h.Target == "Так")
+	}
+	if len(u.History) < 2 || u.History[0].Origin != "ai" || !kept {
+		t.Errorf("history = %+v", u.History)
 	}
 
-	// The agent revises, then the human edits the agent's text: protected again.
-	other := page.Units[0].ID
-	call(t, cs, "save_translation", map[string]any{"id": other, "target": "Націсніце {KEY}"}, nil)
-	call(t, cs, "save_translation", map[string]any{"id": other, "target": "Націсніце {KEY}!"}, nil)
-	if res, b := do(t, ts, "PUT", "/api/units/"+itoa(other), map[string]any{"target": "Націсніце {KEY}.", "state": "translated"}); res.StatusCode != http.StatusOK {
-		t.Fatalf("human save: %d %s", res.StatusCode, b)
+	// Once approved it is protected again.
+	if res, b := do(t, ts, "PUT", "/api/units/"+itoa(id), map[string]any{"target": "Не", "state": "approved"}); res.StatusCode != http.StatusOK {
+		t.Fatalf("approve: %d %s", res.StatusCode, b)
 	}
-	if text, isErr := call(t, cs, "save_translation", map[string]any{"id": other, "target": "Націсніце {KEY}?"}, nil); !isErr || !strings.Contains(text, "not changed") {
-		t.Errorf("human edit of an ai text overwritten: %v %s", isErr, text)
+	if text, isErr := call(t, cs, "save_translation", map[string]any{"id": id, "target": "Так"}, nil); !isErr || !strings.Contains(text, "not changed") {
+		t.Errorf("approved text overwritten: %v %s", isErr, text)
 	}
 }
 

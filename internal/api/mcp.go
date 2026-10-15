@@ -19,7 +19,7 @@ import (
 // The MCP server at /mcp lets an agent read the corpus, translate, review and
 // edit the glossary. It reuses the handlers' cores, so its writes behave like
 // the editor's (TM index, QA masks, Rev), except that a translation it saves
-// never overwrites one a human wrote.
+// never overwrites an approved one.
 
 const mcpInstructions = `bellingua is a translation workbench. A project has files of units (strings); each unit has a source, a target and a state.
 
@@ -29,7 +29,7 @@ Codes: some sources contain markup or placeholders ("codes", listed per unit in 
 
 Workflow for translating: find units with list_units (states ["untranslated","mt"]), read each with get_unit (full texts; list rows are cut to a preview), consult get_unit_tm, the glossary terms in get_unit (use each term's "inserts" verbatim) and machine_translate, then save_translation.
 
-save_translation marks your edits with origin "ai". You can revise your own earlier save, but it never changes a unit a human, an import or the translation memory translated or approved. Glossary edits trigger a project QA recheck after 2 s.`
+save_translation marks your edits with origin "ai". You can overwrite anything below approved (the previous text stays in the unit's history), but it never changes an approved unit. Glossary edits trigger a project QA recheck after 2 s.`
 
 // mcpOrigin marks agent saves in a unit's history.
 const mcpOrigin = "ai"
@@ -67,7 +67,7 @@ func (s *Server) mcpError(name string, err error) error {
 	case errors.As(err, &mm):
 		return fmt.Errorf("the target's codes don't match the source (missing %q, extra %q); copy every code exactly as in the source, or set force", mm.Missing, mm.Extra)
 	case errors.Is(err, store.ErrSkipped):
-		return errors.New("not changed: this string was translated or approved by a human, an import or the translation memory")
+		return errors.New("not changed: this string is approved")
 	case errors.Is(err, store.ErrDuplicate), errors.Is(err, store.ErrInvalid), errors.Is(err, context.Canceled):
 		return err
 	}
@@ -469,7 +469,7 @@ func (s *Server) mcpTools(srv *mcp.Server) {
 		})
 
 	tool(s, srv, &mcp.Tool{Name: "save_translation", Annotations: writes,
-		Description: "Saves a unit's translation as translated (or mt). Refused when the codes don't match the source. Can revise the agent's own earlier save, but never changes a string a human, an import or the translation memory translated or approved."},
+		Description: "Saves a unit's translation as translated (or mt). Refused when the codes don't match the source. Overwrites anything below approved (history keeps the old text), but never changes an approved string."},
 		func(ctx context.Context, in saveIn) (any, error) {
 			state := model.Translated
 			switch in.State {
@@ -479,7 +479,7 @@ func (s *Server) mcpTools(srv *mcp.Server) {
 			default:
 				return nil, badRequest("state must be translated or mt, not %q", in.State)
 			}
-			r, err := s.save(ctx, in.ID, store.Save{Target: &in.Target, State: state, Origin: mcpOrigin, Force: in.Force, IfBelow: model.Translated, RedoOrigin: mcpOrigin})
+			r, err := s.save(ctx, in.ID, store.Save{Target: &in.Target, State: state, Origin: mcpOrigin, Force: in.Force, IfBelow: model.Approved})
 			if err != nil {
 				return nil, err
 			}
