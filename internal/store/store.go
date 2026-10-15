@@ -42,6 +42,9 @@ var schemaV5 string
 //go:embed schema_v6.sql
 var schemaV6 string
 
+//go:embed schema_v7.sql
+var schemaV7 string
+
 // migration is SQL plus an optional Go step run in the same transaction.
 type migration struct {
 	sql  string
@@ -57,6 +60,7 @@ var migrations = []migration{
 	{sql: schemaV4, post: backfillSourceHash},
 	{sql: schemaV5},
 	{sql: schemaV6},
+	{sql: schemaV7},
 }
 
 // backfillSourceHash fills units.source_hash for existing rows.

@@ -238,7 +238,7 @@ func TestSearchAndFilters(t *testing.T) {
 	}
 
 	// Bulk approve skips nothing here (no errors) and records history.
-	n, err := st.SetState(ctx, store.Filter{ProjectID: p.ID}, model.Approved, true)
+	n, err := st.SetState(ctx, store.Filter{ProjectID: p.ID}, model.Approved, true, "")
 	if err != nil || n != 3 {
 		t.Fatalf("bulk approve: %d %v", n, err)
 	}

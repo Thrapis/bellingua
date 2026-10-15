@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { ArrowLeft, BookMarked, ChevronDown, Search, X } from "lucide-react";
+import { ArrowLeft, BookMarked, ChevronDown, History, Search, X } from "lucide-react";
 import { api, ApiError, SORTS, type Filter, type Piece, type Row, type Sort, type State, type Unit, type UnitsPage } from "@/lib/api";
 import { splitTarget } from "@/lib/pieces";
 import { Button } from "@/components/ui/button";
@@ -341,7 +341,8 @@ export function Editor() {
     if (await confirm({ title, description, action: "Apply" })) run();
   };
   const bulk = useMutation({
-    mutationFn: (v: { state: State; noErrors: boolean }) => api.bulk(pid, filter, v),
+    mutationFn: (v: { state: State; noErrors: boolean; onlyApproved?: boolean }) =>
+      api.bulk(pid, v.onlyApproved ? { ...filter, states: ["approved"] } : filter, { state: v.state, noErrors: v.noErrors }),
     onSuccess: (r) => {
       toast.success(`${r.changed.toLocaleString()} strings updated`);
       qc.invalidateQueries({ queryKey: ["units", pid] });
@@ -408,6 +409,11 @@ export function Editor() {
             <BookMarked /> Glossary
           </Link>
         </Button>
+        <Button asChild size="sm" variant="ghost">
+          <Link href={`/history?project=${pid}`}>
+            <History /> History
+          </Link>
+        </Button>
         <DropdownMenu modal={false}>
           <DropdownMenuTrigger asChild>
             <Button size="sm" variant="outline">
@@ -423,6 +429,9 @@ export function Editor() {
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => ask("Mark matching translations as translated?", "Every matching string that has a translation changes state.", () => bulk.mutate({ state: "translated", noErrors: false }))}>
               Mark as translated
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => ask("Un-approve matching translations?", "Only approved strings in the filter change: they become Translated, and their texts are kept.", () => bulk.mutate({ state: "translated", noErrors: false, onlyApproved: true }))}>
+              Un-approve (approved to translated)
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => ask("Reset matching translations to machine?", "Texts are kept; only the state changes, so they show up for review again.", () => bulk.mutate({ state: "mt", noErrors: false }))}>
               Reset to machine

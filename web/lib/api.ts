@@ -58,6 +58,33 @@ export const SORTS: { id: Sort; label: string }[] = [
 ];
 export type UnitsPage = { rows: Row[]; next: Cursor | null };
 
+export type HistoryOrigin = "edit" | "mt" | "tm" | "ai" | "bulk" | "import";
+export type HistoryTransition = { old: State; new: State; count: number };
+export type HistoryBatch = {
+  key: string;
+  origin: HistoryOrigin;
+  count: number;
+  first: number;
+  last: number;
+  transitions: HistoryTransition[];
+};
+export type HistoryDay = { start: number; count: number; batches: HistoryBatch[] };
+export type HistoryRow = {
+  id: number;
+  unit: number;
+  file: number;
+  path: string;
+  key: string;
+  origin: HistoryOrigin;
+  at: number;
+  batch?: string;
+  oldState: State;
+  state: State;
+  old: string | null;
+  new: string | null;
+};
+export type HistoryQuery = { from?: number; to?: number; origin?: string; batch?: string; state?: State };
+
 export type Issue = { check: string; severity: "error" | "warning"; message: string };
 
 export type Term = {
@@ -252,6 +279,14 @@ export const api = {
   unitTM: (id: number, signal?: AbortSignal) => request<TMResult>("GET", `/units/${id}/tm`, undefined, signal),
   propagate: (id: number) => request<{ changed: number }>("POST", `/units/${id}/propagate`),
   tmFill: (id: number, f: Filter) => request<Job>("POST", `/projects/${id}/tm/fill?${filterParams(f)}`),
+  historyDays: (id: number, tz: number, before: number) =>
+    request<{ days: HistoryDay[]; next: number }>("GET", `/projects/${id}/history/days?tz=${tz}&before=${before}`),
+  history: (id: number, q: HistoryQuery, after: Cursor | null) => {
+    const p = new URLSearchParams();
+    for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== "") p.set(k, String(v));
+    if (after) p.set("after", `${after.a}.${after.b}`);
+    return request<{ rows: HistoryRow[]; next: Cursor | null }>("GET", `/projects/${id}/history?${p}`);
+  },
   bulk: (id: number, f: Filter, b: { state: State; noErrors: boolean }) =>
     request<{ changed: number }>("POST", `/projects/${id}/bulk?${filterParams(f)}`, b),
   mtBatch: (id: number, f: Filter, v: { overwrite: boolean; glossary: boolean }) =>

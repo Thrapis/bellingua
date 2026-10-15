@@ -189,7 +189,7 @@ func TestMCPUnitLangs(t *testing.T) {
 	cs, ts, p := newMCPXLIFF(t, tmFixture())
 	ids := unitIDs(t, cs, p.ID)
 
-	if text, isErr := call(t, cs, "get_unit_langs", map[string]any{"id": ids["a"]}, nil); isErr || strings.TrimSpace(text) != "[]" {
+	if text, isErr := call(t, cs, "get_unit_langs", map[string]any{"id": ids["a"]}, nil); isErr || strings.TrimSpace(text) != `{"langs":[]}` {
 		t.Errorf("no extra language: %v %s", isErr, text)
 	}
 
@@ -213,13 +213,14 @@ func TestMCPUnitLangs(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	var langs []mcpLang
-	call(t, cs, "get_unit_langs", map[string]any{"id": ids["a"]}, &langs)
+	var res mcpLangs
+	call(t, cs, "get_unit_langs", map[string]any{"id": ids["a"]}, &res)
+	langs := res.Langs
 	if len(langs) != 1 || langs[0].Lang != "en" || langs[0].Target == nil || *langs[0].Target != "Talk to Anton about the letter" || langs[0].Outdated {
 		t.Errorf("langs for a = %+v", langs)
 	}
-	call(t, cs, "get_unit_langs", map[string]any{"id": ids["e"]}, &langs)
-	if len(langs) != 0 {
+	call(t, cs, "get_unit_langs", map[string]any{"id": ids["e"]}, &res)
+	if langs = res.Langs; len(langs) != 0 {
 		t.Errorf("langs for a unit the import didn't match = %+v", langs)
 	}
 	if text, isErr := call(t, cs, "get_unit_langs", map[string]any{"id": 999999}, nil); isErr && !strings.Contains(text, "not found") {
@@ -233,21 +234,23 @@ func TestMCPTermForms(t *testing.T) {
 		`<trans-unit id="a"><source>Улица Баумана закрыта</source></trans-unit>`,
 		`<trans-unit id="b"><source>Подарок Бауману</source></trans-unit>`,
 		`<trans-unit id="c"><source>Совсем другое</source></trans-unit>`))
-	var forms []struct {
-		Form  string `json:"form"`
-		Count int    `json:"count"`
+	var forms struct {
+		Forms []struct {
+			Form  string `json:"form"`
+			Count int    `json:"count"`
+		} `json:"forms"`
 	}
 	if text, isErr := call(t, cs, "term_forms", map[string]any{"project": p.ID, "source": "Бауман"}, &forms); isErr {
 		t.Fatalf("term_forms: %s", text)
 	}
 	got := map[string]int{}
-	for _, f := range forms {
+	for _, f := range forms.Forms {
 		got[f.Form] = f.Count
 	}
 	if got["Баумана"] != 1 || got["Бауману"] != 1 || len(got) > 2 {
 		t.Errorf("forms = %v", got)
 	}
-	if text, isErr := call(t, cs, "term_forms", map[string]any{"project": p.ID, "source": "Несуществующее"}, nil); isErr || strings.TrimSpace(text) != "[]" {
+	if text, isErr := call(t, cs, "term_forms", map[string]any{"project": p.ID, "source": "Несуществующее"}, nil); isErr || strings.TrimSpace(text) != `{"forms":[]}` {
 		t.Errorf("no forms: %v %s", isErr, text)
 	}
 	if text, isErr := call(t, cs, "term_forms", map[string]any{"project": p.ID, "source": "  "}, nil); !isErr || !strings.Contains(text, "source is required") {
@@ -270,11 +273,13 @@ func TestMCPJobs(t *testing.T) {
 	if j := waitJob(t, cs, job.ID); j["status"] != "done" {
 		t.Errorf("job = %v", j)
 	}
-	var jobs []struct {
-		ID string `json:"id"`
+	var jobs struct {
+		Jobs []struct {
+			ID string `json:"id"`
+		} `json:"jobs"`
 	}
 	call(t, cs, "list_jobs", nil, &jobs)
-	if !slices.ContainsFunc(jobs, func(j struct {
+	if !slices.ContainsFunc(jobs.Jobs, func(j struct {
 		ID string `json:"id"`
 	}) bool {
 		return j.ID == job.ID
@@ -521,9 +526,9 @@ func TestMCPConcurrentWithHTTP(t *testing.T) {
 	}
 	wg.Wait()
 
-	var projects []mcpProject
+	var projects mcpProjects
 	call(t, cs, "list_projects", nil, &projects)
-	if c := projects[0].Counts; c.Translated != 6 || c.Approved != 6 || c.Total != 12 {
+	if c := projects.Projects[0].Counts; c.Translated != 6 || c.Approved != 6 || c.Total != 12 {
 		t.Errorf("counters = %+v, want 6 translated and 6 approved", c)
 	}
 	// The same numbers by query, through the search index.

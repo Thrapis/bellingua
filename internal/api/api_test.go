@@ -146,6 +146,89 @@ func TestAPIFlow(t *testing.T) {
 	}
 }
 
+// The editor's "Un-approve" sends the filter with state=approved and the target
+// state translated: only approved units move, text and TM membership stay.
+func TestUnapprove(t *testing.T) {
+	ts, p := newServer(t)
+	pid := "/api/projects/" + itoa(p.ID)
+
+	_, b := do(t, ts, "GET", pid+"/units", nil)
+	var page unitsPage
+	json.Unmarshal(b, &page)
+	first := page.Rows[0]
+	u := "/api/units/" + itoa(first.ID)
+	if res, b := do(t, ts, "PUT", u, map[string]any{"target": "Націсніце {KEY}!", "state": "approved"}); res.StatusCode != http.StatusOK {
+		t.Fatalf("approve: %d %s", res.StatusCode, b)
+	}
+
+	// A filter that matches the MT unit too must still only touch approved ones.
+	_, b = do(t, ts, "POST", pid+"/bulk?state=approved", map[string]any{"state": "translated"})
+	if !strings.Contains(string(b), `"changed":1`) {
+		t.Fatalf("un-approve = %s", b)
+	}
+	for state, want := range map[string]string{"approved": `{"count":0}`, "translated": `{"count":1}`} {
+		_, b = do(t, ts, "GET", pid+"/count?state="+state, nil)
+		if string(bytes.TrimSpace(b)) != want {
+			t.Errorf("count %s = %s", state, b)
+		}
+	}
+	_, b = do(t, ts, "GET", u, nil)
+	if !strings.Contains(string(b), `"state":"translated"`) || !strings.Contains(string(b), "Націсніце") {
+		t.Errorf("unit after un-approve = %s", b)
+	}
+	if !strings.Contains(string(b), `"origin":"bulk"`) {
+		t.Errorf("history = %s", b)
+	}
+
+	// Nothing approved is left, so a repeat changes nothing.
+	_, b = do(t, ts, "POST", pid+"/bulk?state=approved", map[string]any{"state": "translated"})
+	if !strings.Contains(string(b), `"changed":0`) {
+		t.Errorf("repeat = %s", b)
+	}
+}
+
+func TestHistoryAPI(t *testing.T) {
+	ts, p := newServer(t)
+	pid := "/api/projects/" + itoa(p.ID)
+	_, b := do(t, ts, "GET", pid+"/units", nil)
+	var page unitsPage
+	json.Unmarshal(b, &page)
+	u := "/api/units/" + itoa(page.Rows[0].ID)
+	do(t, ts, "PUT", u, map[string]any{"target": "Націсніце {KEY}!", "state": "approved"})
+	do(t, ts, "POST", pid+"/bulk?state=approved", map[string]any{"state": "translated"})
+
+	var days struct {
+		Days []store.HistoryDay `json:"days"`
+		Next int64              `json:"next"`
+	}
+	res, b := do(t, ts, "GET", pid+"/history/days?tz=10800", nil)
+	if res.StatusCode != http.StatusOK || json.Unmarshal(b, &days) != nil || len(days.Days) != 1 || days.Days[0].Count != 2 {
+		t.Fatalf("days = %d %s", res.StatusCode, b)
+	}
+	origins := map[string]bool{}
+	for _, bt := range days.Days[0].Batches {
+		origins[bt.Origin] = true
+	}
+	if !origins["edit"] || !origins["bulk"] {
+		t.Errorf("origins = %v", origins)
+	}
+
+	var list struct {
+		Rows []store.HistoryRow `json:"rows"`
+	}
+	_, b = do(t, ts, "GET", pid+"/history?origin=bulk&limit=5", nil)
+	if json.Unmarshal(b, &list) != nil || len(list.Rows) != 1 || list.Rows[0].State != model.Translated || list.Rows[0].OldState != model.Approved {
+		t.Errorf("bulk feed = %s", b)
+	}
+	if res, _ := do(t, ts, "GET", pid+"/history?origin=nope", nil); res.StatusCode != http.StatusBadRequest {
+		t.Errorf("bad origin: %d", res.StatusCode)
+	}
+	_, b = do(t, ts, "GET", pid+"/history/days?before=1", nil)
+	if !strings.Contains(string(b), `"days":[]`) {
+		t.Errorf("empty days = %s", b)
+	}
+}
+
 func TestSPA(t *testing.T) {
 	ts, _ := newServer(t)
 	for path, want := range map[string]string{"/": "home", "/editor": "editor", "/editor?project=1": "editor", "/nope": "home"} {
