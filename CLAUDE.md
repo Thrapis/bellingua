@@ -285,8 +285,10 @@ the pieces are recovered with `model.SplitTarget`:
 - **Agent view**: tools exchange plain strings plus a `codes` list, and state and
   QA ids as names, not the UI's piece arrays and masks.
 - **Write guard**: `save_translation` saves with `Origin: "ai"` and
-  `IfBelow: Translated`, and only accepts the states `translated`/`mt`, so it
-  never changes human work. Glossary tools are full CRUD. Import, export,
+  `IfBelow: Translated` and `RedoOrigin: "ai"`, and only accepts the states
+  `translated`/`mt`. `RedoOrigin` lets it revise a unit whose latest history
+  entry is its own `ai` save, so it never changes human, import or TM work.
+  Glossary tools are full CRUD. Import, export,
   bulk changes, settings, batch MT, TM fill and backup are deliberately not
   tools.
 - **Guards**: the SDK refuses a non-local `Host` (DNS rebinding), and

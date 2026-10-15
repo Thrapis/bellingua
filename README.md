@@ -200,8 +200,8 @@ keeps the previous database as `bellingua.db.bak`.
 at `/mcp`. An agent can then list and search strings, read them with their
 QA issues, glossary terms, TM matches and other languages, run MT, save
 translations and edit the glossary. A translation the agent saves is marked
-`ai` in the history. It never overwrites a string that a human translated or
-approved. Import, export, bulk changes, settings and backups stay in the UI.
+`ai` in the history. The agent can revise its own translation, but it never
+overwrites a string that a human translated or approved. Import, export, bulk changes, settings and backups stay in the UI.
 
 bellingua must be running. Claude Code (or any client that speaks HTTP):
 

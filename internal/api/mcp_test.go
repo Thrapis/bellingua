@@ -150,6 +150,11 @@ func TestMCPSaveGuard(t *testing.T) {
 		t.Errorf("history = %+v", u.History)
 	}
 
+	// The agent may revise its own translation.
+	if text, isErr := call(t, cs, "save_translation", map[string]any{"id": plain.ID, "target": "Так!"}, &u); isErr || *u.Target != "Так!" {
+		t.Errorf("revising own save: %v %s", isErr, text)
+	}
+
 	if text, isErr := call(t, cs, "save_translation", map[string]any{"id": plain.ID, "target": "Так", "state": "approved"}, nil); !isErr || !strings.Contains(text, "state") {
 		t.Errorf("approved state accepted: %v %s", isErr, text)
 	}
@@ -170,6 +175,33 @@ func TestMCPSaveGuard(t *testing.T) {
 	// MT state is allowed below translated.
 	if text, isErr := call(t, cs, "save_translation", map[string]any{"id": withCode.ID, "target": "Націсніце {KEY}", "state": "mt"}, &u); isErr || u.State != "mt" {
 		t.Errorf("mt save: %v %s", isErr, text)
+	}
+}
+
+// Only the agent's own saves can be revised: a human's translated (not just
+// approved) text, a TM fill and an import stay protected.
+func TestMCPOverwriteOwnOnly(t *testing.T) {
+	cs, ts, p := newMCP(t)
+	var page mcpPage
+	call(t, cs, "list_units", map[string]any{"project": p.ID}, &page)
+	id := page.Units[1].ID
+
+	if res, b := do(t, ts, "PUT", "/api/units/"+itoa(id), map[string]any{"target": "Так", "state": "translated"}); res.StatusCode != http.StatusOK {
+		t.Fatalf("human save: %d %s", res.StatusCode, b)
+	}
+	if text, isErr := call(t, cs, "save_translation", map[string]any{"id": id, "target": "Не"}, nil); !isErr || !strings.Contains(text, "not changed") {
+		t.Errorf("human translated text overwritten: %v %s", isErr, text)
+	}
+
+	// The agent revises, then the human edits the agent's text: protected again.
+	other := page.Units[0].ID
+	call(t, cs, "save_translation", map[string]any{"id": other, "target": "Націсніце {KEY}"}, nil)
+	call(t, cs, "save_translation", map[string]any{"id": other, "target": "Націсніце {KEY}!"}, nil)
+	if res, b := do(t, ts, "PUT", "/api/units/"+itoa(other), map[string]any{"target": "Націсніце {KEY}.", "state": "translated"}); res.StatusCode != http.StatusOK {
+		t.Fatalf("human save: %d %s", res.StatusCode, b)
+	}
+	if text, isErr := call(t, cs, "save_translation", map[string]any{"id": other, "target": "Націсніце {KEY}?"}, nil); !isErr || !strings.Contains(text, "not changed") {
+		t.Errorf("human edit of an ai text overwritten: %v %s", isErr, text)
 	}
 }
 
