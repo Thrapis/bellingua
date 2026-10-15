@@ -28,14 +28,27 @@ func (s *Server) qaJob(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	runner, _, err := s.runner(r.Context(), p)
+	job, err := s.startQA(r.Context(), p)
 	if err != nil {
 		return err
 	}
-	return s.startOnce(w, "qa", p, func(ctx context.Context, pr Progress) (any, error) {
+	writeJSON(w, http.StatusAccepted, job)
+	return nil
+}
+
+// startQA starts a QA recheck of the whole project.
+func (s *Server) startQA(ctx context.Context, p *store.Project) (Job, error) {
+	runner, _, err := s.runner(ctx, p)
+	if err != nil {
+		return Job{}, err
+	}
+	if s.jobs.Running("qa", p.ID) {
+		return Job{}, &httpError{code: http.StatusConflict, msg: "qa already running for this project"}
+	}
+	return s.jobs.Start("qa", p.ID, func(ctx context.Context, pr Progress) (any, error) {
 		n, err := s.st.RecheckQA(ctx, p.ID, runner, func(done, total int64) { pr.Set(done, total) })
 		return map[string]int64{"changed": n}, err
-	})
+	}), nil
 }
 
 func (s *Server) importJob(w http.ResponseWriter, r *http.Request) error {

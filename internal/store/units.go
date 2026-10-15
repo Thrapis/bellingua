@@ -417,6 +417,10 @@ type Save struct {
 	// state is IfBelow or higher — batch MT uses it so a unit a human edited
 	// meanwhile is never overwritten.
 	IfBelow model.State
+	// RedoOrigin lets IfBelow pass when the unit's latest history entry has
+	// this origin, so a writer can revise its own earlier save but nothing
+	// else (an import has no history entry and stays protected).
+	RedoOrigin string
 }
 
 // ErrSkipped is returned by SaveUnit when Save.IfBelow rejected the save.
@@ -432,7 +436,18 @@ func (s *Store) SaveUnit(ctx context.Context, id int64, sv Save, runner *qa.Runn
 			return err
 		}
 		if sv.IfBelow > 0 && u.State >= sv.IfBelow {
-			return ErrSkipped
+			own := false
+			if sv.RedoOrigin != "" {
+				var origin string
+				err := tx.QueryRowContext(ctx, `SELECT origin FROM history WHERE unit_id = ? ORDER BY id DESC LIMIT 1`, id).Scan(&origin)
+				if err != nil && !errors.Is(err, sql.ErrNoRows) {
+					return err
+				}
+				own = origin == sv.RedoOrigin
+			}
+			if !own {
+				return ErrSkipped
+			}
 		}
 		var pieces []model.Piece
 		state := sv.State

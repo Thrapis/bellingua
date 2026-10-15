@@ -132,6 +132,7 @@ func (s *Server) Handler() http.Handler {
 	h("DELETE /api/jobs/{id}", s.cancelJob)
 	h("GET /api/backup", s.backupStatus)
 	h("POST /api/backup", s.backupNow)
+	mux.Handle("/mcp", s.mcpHandler())
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no such endpoint", nil)
 	})
@@ -272,25 +273,30 @@ func filter(p *store.Project, r *http.Request) (store.Filter, error) {
 		}
 		f.FileID = id
 	}
-	for _, name := range splitList(q.Get("state")) {
+	return f, filterLists(&f, splitList(q.Get("state")), splitList(q.Get("qa")))
+}
+
+// filterLists adds state names and QA check ids ("any" for every check) to f.
+func filterLists(f *store.Filter, states, checks []string) error {
+	for _, name := range states {
 		st, ok := model.ParseState(name)
 		if !ok {
-			return f, badRequest("unknown state %q", name)
+			return badRequest("unknown state %q", name)
 		}
 		f.States = append(f.States, st)
 	}
-	for _, id := range splitList(q.Get("qa")) {
+	for _, id := range checks {
 		if id == "any" {
 			f.QA = qa.Check(^uint32(0))
 			break
 		}
 		c, ok := qa.ByID(id)
 		if !ok {
-			return f, badRequest("unknown QA check %q", id)
+			return badRequest("unknown QA check %q", id)
 		}
 		f.QA |= c
 	}
-	return f, nil
+	return nil
 }
 
 func splitList(s string) []string {
@@ -414,21 +420,29 @@ func (s *Server) listUnits(w http.ResponseWriter, r *http.Request) error {
 	if !okSort {
 		return badRequest("unknown sort %q", r.URL.Query().Get("sort"))
 	}
-	var after *store.Cursor
-	if v := r.URL.Query().Get("after"); v != "" {
-		a, b, found := strings.Cut(v, ".")
-		x, err1 := strconv.ParseInt(a, 10, 64)
-		y, err2 := strconv.ParseInt(b, 10, 64)
-		if !found || err1 != nil || err2 != nil {
-			return badRequest("bad cursor")
-		}
-		after = &store.Cursor{A: x, B: y}
+	after, err := parseCursor(r.URL.Query().Get("after"))
+	if err != nil {
+		return err
 	}
 	rows, next, err := s.st.List(r.Context(), f, sort, after, limit)
 	if err != nil {
 		return err
 	}
 	return ok(w, unitsPage{Rows: rows, Next: next})
+}
+
+// parseCursor reads a list cursor in its "A.B" form; "" means the first page.
+func parseCursor(v string) (*store.Cursor, error) {
+	if v == "" {
+		return nil, nil
+	}
+	a, b, found := strings.Cut(v, ".")
+	x, err1 := strconv.ParseInt(a, 10, 64)
+	y, err2 := strconv.ParseInt(b, 10, 64)
+	if !found || err1 != nil || err2 != nil {
+		return nil, badRequest("bad cursor")
+	}
+	return &store.Cursor{A: x, B: y}, nil
 }
 
 func (s *Server) countUnits(w http.ResponseWriter, r *http.Request) error {
@@ -522,38 +536,55 @@ func (s *Server) saveUnit(w http.ResponseWriter, r *http.Request) error {
 	if err := decode(r, &body); err != nil {
 		return err
 	}
-	cur, err := s.st.Unit(r.Context(), id, false)
+	resp, err := s.save(r.Context(), id, store.Save{Target: body.Target, State: body.State, Origin: "edit", Force: body.Force})
 	if err != nil {
 		return err
 	}
-	p, err := s.st.Project(r.Context(), cur.ProjectID)
+	return ok(w, resp)
+}
+
+// save stores a unit's translation, keeps the TM index current and returns
+// the unit with its QA issues and terms.
+func (s *Server) save(ctx context.Context, id int64, sv store.Save) (unitResponse, error) {
+	cur, err := s.st.Unit(ctx, id, false)
 	if err != nil {
-		return err
+		return unitResponse{}, err
 	}
-	runner, _, err := s.runner(r.Context(), p)
+	p, err := s.st.Project(ctx, cur.ProjectID)
 	if err != nil {
-		return err
+		return unitResponse{}, err
 	}
-	u, err := s.st.SaveUnit(r.Context(), id, store.Save{Target: body.Target, State: body.State, Origin: "edit", Force: body.Force}, runner)
+	runner, _, err := s.runner(ctx, p)
 	if err != nil {
-		return err
+		return unitResponse{}, err
+	}
+	u, err := s.st.SaveUnit(ctx, id, sv, runner)
+	if err != nil {
+		return unitResponse{}, err
 	}
 	human := u.Target != nil && u.State >= model.Translated
 	s.tm.Update(u.ProjectID, u.ID, u.Source, human)
-	resp, err := s.unitWithIssues(r.Context(), u)
+	resp, err := s.unitWithIssues(ctx, u)
 	if err != nil {
-		return err
+		return unitResponse{}, err
 	}
 	// Identical strings still waiting for a human translation: the UI offers
 	// to apply this one to them.
 	if human {
-		dups, err := s.st.PendingDuplicates(r.Context(), u.ProjectID, u.ID, model.Plain(u.Source))
+		dups, err := s.st.PendingDuplicates(ctx, u.ProjectID, u.ID, model.Plain(u.Source))
 		if err != nil {
-			return err
+			return unitResponse{}, err
 		}
 		resp.Duplicates = len(dups)
 	}
-	return ok(w, resp)
+	return resp, nil
+}
+
+// mtResponse is a unit's machine translation, plain and with the glossary
+// terms pinned.
+type mtResponse struct {
+	mt.Result
+	Glossary []model.Piece `json:"glossary,omitempty"`
 }
 
 func (s *Server) unitMT(w http.ResponseWriter, r *http.Request) error {
@@ -561,16 +592,24 @@ func (s *Server) unitMT(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	u, err := s.st.Unit(r.Context(), id, false)
+	out, err := s.translateUnit(r.Context(), id)
 	if err != nil {
 		return err
 	}
-	p, err := s.st.Project(r.Context(), u.ProjectID)
+	return ok(w, out)
+}
+
+func (s *Server) translateUnit(ctx context.Context, id int64) (mtResponse, error) {
+	u, err := s.st.Unit(ctx, id, false)
 	if err != nil {
-		return err
+		return mtResponse{}, err
+	}
+	p, err := s.st.Project(ctx, u.ProjectID)
+	if err != nil {
+		return mtResponse{}, err
 	}
 	if err := s.mtUnavailable(); err != nil {
-		return err
+		return mtResponse{}, err
 	}
 	// Alongside the plain translation, one with the glossary terms pinned
 	// (masked, then inserted in their agreed form). Both run at once.
@@ -579,26 +618,23 @@ func (s *Server) unitMT(w http.ResponseWriter, r *http.Request) error {
 		err error
 	}
 	var pinnedCh chan pinnedResult
-	if _, g, err := s.runner(r.Context(), p); err == nil {
+	if _, g, err := s.runner(ctx, p); err == nil {
 		if src, repl := g.Pin(u.Source); len(repl) > 0 {
 			pinnedCh = make(chan pinnedResult, 1)
 			go func() {
-				res, err := s.mt.TranslatePieces(r.Context(), src, p.SourceLang, p.TargetLang)
+				res, err := s.mt.TranslatePieces(ctx, src, p.SourceLang, p.TargetLang)
 				pinnedCh <- pinnedResult{glossary.Unpin(res.Target, repl), err}
 			}()
 		}
 	}
-	res, err := s.mt.TranslatePieces(r.Context(), u.Source, p.SourceLang, p.TargetLang)
+	res, err := s.mt.TranslatePieces(ctx, u.Source, p.SourceLang, p.TargetLang)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			return err
+			return mtResponse{}, err
 		}
-		return &httpError{code: http.StatusBadGateway, msg: err.Error()}
+		return mtResponse{}, &httpError{code: http.StatusBadGateway, msg: err.Error()}
 	}
-	out := struct {
-		mt.Result
-		Glossary []model.Piece `json:"glossary,omitempty"`
-	}{Result: res}
+	out := mtResponse{Result: res}
 	if pinnedCh != nil {
 		if pr := <-pinnedCh; pr.err == nil {
 			out.Glossary = pr.tgt
@@ -606,7 +642,7 @@ func (s *Server) unitMT(w http.ResponseWriter, r *http.Request) error {
 			s.log.Warn("mt with glossary", "unit", id, "err", pr.err)
 		}
 	}
-	return ok(w, out)
+	return out, nil
 }
 
 func (s *Server) bulk(w http.ResponseWriter, r *http.Request) error {

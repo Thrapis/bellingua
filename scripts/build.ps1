@@ -12,7 +12,7 @@ Get-ChildItem $dist -Force | Where-Object Name -ne ".gitkeep" | Remove-Item -Rec
 Copy-Item -Recurse -Force (Join-Path $root "web/out/*") $dist
 Push-Location $root
 try {
-    go build -trimpath -ldflags "-s -w" -o bellingua.exe ./cmd/bellingua
+    go build -trimpath -ldflags "-s -w" -o bin/bellingua.exe ./cmd/bellingua
     if ($LASTEXITCODE -ne 0) { throw "go build failed" }
-    Write-Host "built $(Join-Path $root 'bellingua.exe')"
+    Write-Host "built $(Join-Path $root 'bin/bellingua.exe')"
 } finally { Pop-Location }

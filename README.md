@@ -192,6 +192,29 @@ keeps the previous database as `bellingua.db.bak`.
 | `qa -project P` | recompute QA for all units (after changing checks) |
 | `backup [-list]`, `restore [-from NAME] [-target dir\|sftp]` | see above |
 | `projects` | list projects with progress |
+| `mcp [-listen addr]` | MCP server over stdio, relayed to a running `serve` (see below) |
+
+## AI agents (MCP)
+
+`serve` also answers the [Model Context Protocol](https://modelcontextprotocol.io)
+at `/mcp`. An agent can then list and search strings, read them with their
+QA issues, glossary terms, TM matches and other languages, run MT, save
+translations and edit the glossary. A translation the agent saves is marked
+`ai` in the history. The agent can revise its own translation, but it never
+overwrites a string that a human translated or approved. Import, export, bulk changes, settings and backups stay in the UI.
+
+bellingua must be running. Claude Code (or any client that speaks HTTP):
+
+```powershell
+claude mcp add --transport http bellingua http://127.0.0.1:7070/mcp
+```
+
+Clients that start their MCP servers as processes (Claude Desktop's
+`claude_desktop_config.json`) use the stdio relay:
+
+```json
+{ "mcpServers": { "bellingua": { "command": "C:\\path\\to\\bellingua.exe", "args": ["mcp"] } } }
+```
 
 ## Machine translation setup
 

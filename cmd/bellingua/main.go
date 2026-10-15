@@ -10,6 +10,7 @@
 //	bellingua backup
 //	bellingua restore [-from latest|<name>]
 //	bellingua projects
+//	bellingua mcp              (MCP over stdio, relayed to a running serve)
 //
 // Every command takes -config (default bellingua.yaml, optional) and -db.
 package main
@@ -43,6 +44,7 @@ var commands = map[string]func(ctx context.Context, args []string) error{
 	"backup":   cmdBackup,
 	"restore":  cmdRestore,
 	"projects": cmdProjects,
+	"mcp":      cmdMCP,
 }
 
 // launched is set when bellingua runs without arguments (see main).
@@ -126,6 +128,7 @@ commands:
   backup     snapshot the database to the configured targets
   restore    replace the database with a backup (server must be stopped)
   projects   list projects
+  mcp        MCP server over stdio for AI agents (relays to a running serve)
   version    print the version
 
 run "bellingua <command> -h" for the command's flags

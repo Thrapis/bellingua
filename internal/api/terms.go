@@ -69,13 +69,21 @@ func (s *Server) createTerm(w http.ResponseWriter, r *http.Request) error {
 	if err := decode(r, &b); err != nil {
 		return err
 	}
-	t, err := s.st.CreateTerm(r.Context(), p.ID, b.term())
+	t, err := s.addTerm(r.Context(), p.ID, b.term())
 	if err != nil {
 		return err
 	}
-	s.glossaryChanged(p.ID)
 	writeJSON(w, http.StatusCreated, t)
 	return nil
+}
+
+func (s *Server) addTerm(ctx context.Context, pid int64, t glossary.Term) (glossary.Term, error) {
+	t, err := s.st.CreateTerm(ctx, pid, t)
+	if err != nil {
+		return t, err
+	}
+	s.glossaryChanged(pid)
+	return t, nil
 }
 
 func (s *Server) updateTerm(w http.ResponseWriter, r *http.Request) error {
@@ -87,14 +95,22 @@ func (s *Server) updateTerm(w http.ResponseWriter, r *http.Request) error {
 	if err := decode(r, &b); err != nil {
 		return err
 	}
-	t, err := s.st.UpdateTerm(r.Context(), id, b.term())
+	t, err := s.editTerm(r.Context(), id, b.term())
 	if err != nil {
 		return err
 	}
-	if pid, err := s.st.TermProject(r.Context(), id); err == nil {
+	return ok(w, t)
+}
+
+func (s *Server) editTerm(ctx context.Context, id int64, t glossary.Term) (glossary.Term, error) {
+	t, err := s.st.UpdateTerm(ctx, id, t)
+	if err != nil {
+		return t, err
+	}
+	if pid, err := s.st.TermProject(ctx, id); err == nil {
 		s.glossaryChanged(pid)
 	}
-	return ok(w, t)
+	return t, nil
 }
 
 func (s *Server) deleteTerm(w http.ResponseWriter, r *http.Request) error {
@@ -102,15 +118,22 @@ func (s *Server) deleteTerm(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	pid, err := s.st.TermProject(r.Context(), id)
+	if err := s.removeTerm(r.Context(), id); err != nil {
+		return err
+	}
+	w.WriteHeader(http.StatusNoContent)
+	return nil
+}
+
+func (s *Server) removeTerm(ctx context.Context, id int64) error {
+	pid, err := s.st.TermProject(ctx, id)
 	if err != nil {
 		return err
 	}
-	if err := s.st.DeleteTerm(r.Context(), id); err != nil {
+	if err := s.st.DeleteTerm(ctx, id); err != nil {
 		return err
 	}
 	s.glossaryChanged(pid)
-	w.WriteHeader(http.StatusNoContent)
 	return nil
 }
 

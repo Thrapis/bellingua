@@ -21,7 +21,7 @@ go build ./... && go vet ./... && go test ./...
 gofmt -l .                                   # must print nothing
 BELLINGUA_BENCH_DB=path/to.db go test -run x -bench . ./internal/store   # real-corpus benchmarks
 
-scripts/build.ps1   # (or build.sh) npm build in web/ -> copy web/out to internal/ui/dist -> go build bellingua.exe
+scripts/build.ps1   # (or build.sh) npm build in web/ -> copy web/out to internal/ui/dist -> go build bin/bellingua.exe
 cd web && npx tsc --noEmit && npx eslint .   # frontend checks
 cd web && npm run dev                        # :3000, proxies /api to 127.0.0.1:7070 (BELLINGUA_API overrides)
 git tag vX.Y.Z && git push origin vX.Y.Z     # release: .github/workflows/release.yml -> GoReleaser (.goreleaser.yaml)
@@ -273,6 +273,30 @@ the pieces are recovered with `model.SplitTarget`:
   - `/editor` resolves to `editor.html`, and unknown paths fall back to
     `index.html`.
   - `_next/static` is served as immutable.
+
+### MCP (`api/mcp.go`, `cmd/bellingua/mcp.go`)
+
+- **Endpoint**: `/mcp` in `serve` (Streamable HTTP, official
+  `modelcontextprotocol/go-sdk`). The tools live in package `api` and call the
+  same cores as the HTTP handlers (`save`, `tmMatches`, `translateUnit`,
+  `propagateFrom`, `addTerm`/`editTerm`/`removeTerm`, `startQA`,
+  `treeChildren`, `filterLists`, `parseCursor`). A new write path belongs in
+  such a core, so the TM index, QA and `glossaryChanged` stay in step.
+- **Agent view**: tools exchange plain strings plus a `codes` list, and state and
+  QA ids as names, not the UI's piece arrays and masks.
+- **Write guard**: `save_translation` saves with `Origin: "ai"` and
+  `IfBelow: Translated` and `RedoOrigin: "ai"`, and only accepts the states
+  `translated`/`mt`. `RedoOrigin` lets it revise a unit whose latest history
+  entry is its own `ai` save, so it never changes human, import or TM work.
+  Glossary tools are full CRUD. Import, export,
+  bulk changes, settings, batch MT, TM fill and backup are deliberately not
+  tools.
+- **Guards**: the SDK refuses a non-local `Host` (DNS rebinding), and
+  `http.CrossOriginProtection` refuses cross-site browser requests.
+- **`bellingua mcp`**: a stdio relay for process-based clients. It connects as
+  a client to a running serve's `/mcp`, mirrors its tools and forwards calls.
+  It never opens the DB. It reports errors without `fail()`'s "Press Enter",
+  which would read the client's stdin.
 
 ### Frontend (`web/`)
 
