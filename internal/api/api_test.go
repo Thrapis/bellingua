@@ -401,3 +401,35 @@ func TestExtraLanguageAPI(t *testing.T) {
 		t.Errorf("delete again: %d", res.StatusCode)
 	}
 }
+
+// TestCrossOriginProtection proves that a foreign web page can't drive the
+// API with CORS-"simple" POSTs, while the UI (same origin, also through the
+// Next dev proxy, which rewrites Host but forwards the browser's headers) and
+// non-browser clients (no Origin, no Sec-Fetch-Site) still can.
+func TestCrossOriginProtection(t *testing.T) {
+	ts, _ := newServer(t)
+	host := strings.TrimPrefix(ts.URL, "http://")
+	cases := []struct {
+		name string
+		hdr  []string
+		want int
+	}{
+		{"cross-site", []string{"Sec-Fetch-Site", "cross-site", "Origin", "https://evil.example"}, http.StatusForbidden},
+		{"same-site", []string{"Sec-Fetch-Site", "same-site", "Origin", "http://localhost:9999"}, http.StatusForbidden},
+		{"foreign origin, old browser", []string{"Origin", "https://evil.example", "Content-Type", "text/plain"}, http.StatusForbidden},
+		{"same-origin", []string{"Sec-Fetch-Site", "same-origin", "Origin", "http://" + host}, http.StatusCreated},
+		{"dev proxy", []string{"Sec-Fetch-Site", "same-origin", "Origin", "http://localhost:3000"}, http.StatusCreated},
+		{"origin matches host", []string{"Origin", "http://" + host}, http.StatusCreated},
+		{"no headers", nil, http.StatusCreated},
+	}
+	for i, c := range cases {
+		body := map[string]string{"name": "x" + itoa(int64(i)), "sourceLang": "ru", "targetLang": "be"}
+		if res, b := do(t, ts, "POST", "/api/projects", body, c.hdr...); res.StatusCode != c.want {
+			t.Errorf("%s: status %d, want %d (%s)", c.name, res.StatusCode, c.want, b)
+		}
+	}
+	// Safe methods pass even cross-site.
+	if res, _ := do(t, ts, "GET", "/api/projects", nil, "Sec-Fetch-Site", "cross-site"); res.StatusCode != http.StatusOK {
+		t.Errorf("cross-site GET: status %d", res.StatusCode)
+	}
+}
