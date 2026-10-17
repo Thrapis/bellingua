@@ -127,3 +127,43 @@ func BenchmarkSaveUnit(b *testing.B) {
 	b.StopTimer()
 	st.SaveUnit(ctx, u.ID, Save{Target: &orig, State: u.State, Origin: "bench", Force: true}, runner)
 }
+
+// The page cost of list_units' langs: the same first page, then one
+// UnitLangsFor query for its 200 ids.
+func BenchmarkListWithLangs(b *testing.B) {
+	st, pid := benchStore(b)
+	ctx := context.Background()
+	b.ResetTimer()
+	for b.Loop() {
+		rows, _, err := st.List(ctx, Filter{ProjectID: pid}, SortFile, nil, 200)
+		if err != nil {
+			b.Fatal(err)
+		}
+		ids := make([]int64, len(rows))
+		for i, r := range rows {
+			ids[i] = r.ID
+		}
+		if _, err := st.UnitLangsFor(ctx, ids, []string{"uk", "en"}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkUnitLangsFor(b *testing.B) {
+	st, pid := benchStore(b)
+	ctx := context.Background()
+	rows, _, err := st.List(ctx, Filter{ProjectID: pid}, SortFile, &Cursor{A: 3000}, 200)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ids := make([]int64, len(rows))
+	for i, r := range rows {
+		ids[i] = r.ID
+	}
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := st.UnitLangsFor(ctx, ids, []string{"uk", "en"}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

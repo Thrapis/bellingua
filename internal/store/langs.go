@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 
 	"github.com/Thrapis/bellingua/internal/model"
 )
@@ -23,6 +24,8 @@ type UnitLang struct {
 	Target   []model.Piece `json:"tgt"`
 	State    model.State   `json:"state"`
 	Outdated bool          `json:"outdated"` // made from a different source
+
+	Truncated bool `json:"-"` // set by UnitLangsFor when Target is a cut preview
 }
 
 // ProjectLangs lists a project's extra languages in their display order.
@@ -67,6 +70,49 @@ func (s *Store) UnitLangs(ctx context.Context, unitID int64) ([]UnitLang, error)
 			return nil, err
 		}
 		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+// UnitLangsFor returns the extra-language texts of many units at once, cut to
+// PreviewRunes like list rows (Truncated marks cut ones), restricted to langs
+// (all when empty). One query on the unit_langs primary key; units without a
+// text are absent from the map, and each unit's texts are ordered by lang.
+func (s *Store) UnitLangsFor(ctx context.Context, ids []int64, langs []string) (map[int64][]UnitLang, error) {
+	out := map[int64][]UnitLang{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	args := make([]any, 0, len(ids)+len(langs))
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	q := `SELECT l.unit_id, l.lang, l.target, l.target_pieces, l.state, l.source_hash <> u.source_hash
+		FROM unit_langs l JOIN units u ON u.id = l.unit_id
+		WHERE l.unit_id IN (?` + strings.Repeat(",?", len(ids)-1) + `)`
+	if len(langs) > 0 {
+		q += ` AND l.lang IN (?` + strings.Repeat(",?", len(langs)-1) + `)`
+		for _, l := range langs {
+			args = append(args, l)
+		}
+	}
+	rows, err := s.R.QueryContext(ctx, q+` ORDER BY l.unit_id, l.lang`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var l UnitLang
+		var text string
+		var blob []byte
+		if err := rows.Scan(&id, &l.Lang, &text, &blob, &l.State, &l.Outdated); err != nil {
+			return nil, err
+		}
+		if l.Target, _, l.Truncated, err = preview(blob, text); err != nil {
+			return nil, err
+		}
+		out[id] = append(out[id], l)
 	}
 	return out, rows.Err()
 }
