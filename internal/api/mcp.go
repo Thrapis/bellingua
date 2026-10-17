@@ -29,7 +29,11 @@ Codes: some sources contain markup or placeholders ("codes", listed per unit in 
 
 Workflow for translating: find units with list_units (states ["untranslated","mt"]), read each with get_unit (full texts; list rows are cut to a preview), consult get_unit_tm, the glossary terms in get_unit (use each term's "inserts" verbatim) and machine_translate, then save_translation.
 
-save_translation marks your edits with origin "ai". You can overwrite anything below approved (the previous text stays in the unit's history), but it never changes an approved unit. Glossary edits trigger a project QA recheck after 2 s.`
+For many units at once: list_units with langs (e.g. ["uk","en"]) puts those extra-language texts on every row as refs, so no get_unit_langs call per line; save_translations saves up to 200 units per call, and an item without target keeps the current text and just marks it translated (a reviewed good machine translation). Each item succeeds or fails on its own.
+
+Terminology sweeps: when a term is decided and the old form (with its inflections) sits in many units, do not retype them; use replace_in_targets with pairs per form. It is a dry run unless you pass dryRun=false: run the dry run first, check the samples and failures (a replacement that breaks the codes is refused for that unit), then run it for real. Approved units are never touched, states stay as they are.
+
+save_translation, save_translations and replace_in_targets mark your edits with origin "ai". You can overwrite anything below approved (the previous text stays in the unit's history), but it never changes an approved unit. Glossary edits trigger a project QA recheck after 2 s.`
 
 // mcpOrigin marks agent saves in a unit's history.
 const mcpOrigin = "ai"
@@ -117,6 +121,8 @@ type listIn struct {
 	Sort   string `json:"sort,omitempty" jsonschema:"file (default), updated, short or long"`
 	Cursor string `json:"cursor,omitempty" jsonschema:"the next value of the previous page"`
 	Limit  int    `json:"limit,omitempty" jsonschema:"page size, 1-200 (default 50)"`
+	// Langs adds the project's extra-language texts (see get_unit_langs) to each row.
+	Langs []string `json:"langs,omitempty" jsonschema:"extra languages whose texts to add to each row as refs, e.g. [\"uk\",\"en\"]"`
 }
 
 type unitIn struct {
@@ -133,6 +139,19 @@ type saveIn struct {
 	Target string `json:"target" jsonschema:"the full translation, with the source's codes inline"`
 	State  string `json:"state,omitempty" jsonschema:"translated (default) or mt"`
 	Force  bool   `json:"force,omitempty" jsonschema:"save even if the codes don't match the source"`
+}
+
+// maxSaveItems bounds one save_translations call.
+const maxSaveItems = 200
+
+type saveItemIn struct {
+	ID     int64   `json:"id" jsonschema:"unit id"`
+	Target *string `json:"target,omitempty" jsonschema:"the full translation, with the source's codes inline; omit to keep the current text and only set the state"`
+	State  string  `json:"state,omitempty" jsonschema:"translated (default) or mt"`
+}
+
+type saveManyIn struct {
+	Items []saveItemIn `json:"items" jsonschema:"1-200 units to save; each is saved on its own, a failing one does not stop the others"`
 }
 
 type termsIn struct {
@@ -204,6 +223,23 @@ type mcpRow struct {
 	QA        []string `json:"qa,omitempty"`
 	Truncated bool     `json:"truncated,omitempty"` // texts cut to a preview; get_unit has them whole
 	Changed   bool     `json:"changed,omitempty"`
+	// Refs maps each requested extra language to its text (cut like the
+	// source); a language the unit has no text in is absent.
+	Refs          map[string]string `json:"refs,omitempty"`
+	RefsTruncated bool              `json:"refsTruncated,omitempty"`
+}
+
+type mcpSaveResult struct {
+	ID    int64    `json:"id"`
+	OK    bool     `json:"ok"`
+	Error string   `json:"error,omitempty"`
+	QA    []string `json:"qa,omitempty"` // failing QA check ids of the saved unit
+}
+
+type mcpBatch struct {
+	Results []mcpSaveResult `json:"results"`
+	Saved   int             `json:"saved"`
+	Failed  int             `json:"failed"`
 }
 
 type mcpPage struct {
@@ -337,6 +373,39 @@ func toMCPUnit(r unitResponse) mcpUnit {
 	return out
 }
 
+// mcpSaveState maps an agent's state name to the state it may save.
+func mcpSaveState(name string) (model.State, error) {
+	switch name {
+	case "", "translated":
+		return model.Translated, nil
+	case "mt":
+		return model.MT, nil
+	}
+	return 0, badRequest("state must be translated or mt, not %q", name)
+}
+
+// saveItem saves one entry of save_translations through the same core as
+// save_translation. Without a target it keeps the unit's current text.
+func (s *Server) saveItem(ctx context.Context, it saveItemIn) (unitResponse, error) {
+	state, err := mcpSaveState(it.State)
+	if err != nil {
+		return unitResponse{}, err
+	}
+	target := it.Target
+	if target == nil {
+		cur, err := s.st.Unit(ctx, it.ID, false)
+		if err != nil {
+			return unitResponse{}, err
+		}
+		if cur.Target == nil {
+			return unitResponse{}, badRequest("the unit has no translation to keep; send a target")
+		}
+		t := model.Plain(cur.Target)
+		target = &t
+	}
+	return s.save(ctx, it.ID, store.Save{Target: target, State: state, Origin: mcpOrigin, IfBelow: model.Approved})
+}
+
 // --- tools -------------------------------------------------------------------
 
 func (s *Server) mcpTools(srv *mcp.Server) {
@@ -366,7 +435,7 @@ func (s *Server) mcpTools(srv *mcp.Server) {
 		})
 
 	tool(s, srv, &mcp.Tool{Name: "list_units", Annotations: readOnly,
-		Description: "Lists units matching a filter, one page at a time. Texts are previews (\"truncated\" marks cut ones); call get_unit before editing a long string."},
+		Description: "Lists units matching a filter, one page at a time. Texts are previews (\"truncated\" marks cut ones); call get_unit before editing a long string. With langs, each row also carries those extra languages' texts as refs (cut the same way; \"refsTruncated\")."},
 		func(ctx context.Context, in listIn) (any, error) {
 			f, err := in.filter()
 			if err != nil {
@@ -388,11 +457,29 @@ func (s *Server) mcpTools(srv *mcp.Server) {
 			if err != nil {
 				return nil, err
 			}
+			var refs map[int64][]store.UnitLang
+			if len(in.Langs) > 0 {
+				ids := make([]int64, len(rows))
+				for i, r := range rows {
+					ids[i] = r.ID
+				}
+				if refs, err = s.st.UnitLangsFor(ctx, ids, in.Langs); err != nil {
+					return nil, err
+				}
+			}
 			out := mcpPage{Units: []mcpRow{}}
 			for _, r := range rows {
-				out.Units = append(out.Units, mcpRow{ID: r.ID, File: r.FileID, Key: r.Key, Context: r.Context,
+				row := mcpRow{ID: r.ID, File: r.FileID, Key: r.Key, Context: r.Context,
 					Source: model.Plain(r.Source), Target: plainPtr(r.Target), Codes: model.Codes(r.Source),
-					State: r.State.String(), QA: checkIDs(r.QA), Truncated: r.Truncated, Changed: r.Changed})
+					State: r.State.String(), QA: checkIDs(r.QA), Truncated: r.Truncated, Changed: r.Changed}
+				for _, l := range refs[r.ID] {
+					if row.Refs == nil {
+						row.Refs = map[string]string{}
+					}
+					row.Refs[l.Lang] = model.Plain(l.Target)
+					row.RefsTruncated = row.RefsTruncated || l.Truncated
+				}
+				out.Units = append(out.Units, row)
 			}
 			if next != nil {
 				out.Next = fmt.Sprintf("%d.%d", next.A, next.B)
@@ -471,13 +558,9 @@ func (s *Server) mcpTools(srv *mcp.Server) {
 	tool(s, srv, &mcp.Tool{Name: "save_translation", Annotations: writes,
 		Description: "Saves a unit's translation as translated (or mt). Refused when the codes don't match the source. Overwrites anything below approved (history keeps the old text), but never changes an approved string."},
 		func(ctx context.Context, in saveIn) (any, error) {
-			state := model.Translated
-			switch in.State {
-			case "", "translated":
-			case "mt":
-				state = model.MT
-			default:
-				return nil, badRequest("state must be translated or mt, not %q", in.State)
+			state, err := mcpSaveState(in.State)
+			if err != nil {
+				return nil, err
 			}
 			r, err := s.save(ctx, in.ID, store.Save{Target: &in.Target, State: state, Origin: mcpOrigin, Force: in.Force, IfBelow: model.Approved})
 			if err != nil {
@@ -485,6 +568,35 @@ func (s *Server) mcpTools(srv *mcp.Server) {
 			}
 			return toMCPUnit(r), nil
 		})
+
+	tool(s, srv, &mcp.Tool{Name: "save_translations", Annotations: writes,
+		Description: "Saves up to 200 units in one call: items [{id, target?, state?}], each as save_translation does (origin ai, never an approved unit, codes must match). Omit target to keep the unit's current text and only set the state (translated by default): the way to mark a good machine translation as reviewed. Returns one compact result per item {id, ok, error?, qa}; a failing item never stops the others."},
+		func(ctx context.Context, in saveManyIn) (any, error) {
+			if n := len(in.Items); n == 0 || n > maxSaveItems {
+				return nil, badRequest("items must hold 1-%d entries, not %d", maxSaveItems, n)
+			}
+			out := mcpBatch{Results: make([]mcpSaveResult, 0, len(in.Items))}
+			for _, it := range in.Items {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				res := mcpSaveResult{ID: it.ID}
+				if r, err := s.saveItem(ctx, it); err != nil {
+					res.Error = s.mcpError("save_translations", err).Error()
+					out.Failed++
+				} else {
+					res.OK = true
+					res.QA = checkIDs(r.Unit.QA)
+					out.Saved++
+				}
+				out.Results = append(out.Results, res)
+			}
+			return out, nil
+		})
+
+	tool(s, srv, &mcp.Tool{Name: "replace_in_targets", Annotations: writes,
+		Description: "Find/replace over translations, for terminology sweeps after a term decision (all inflected forms): pairs [{find, replace}] are applied in order to each target as plain text (case-sensitive; ignoreCase, wholeWord optional). Units come from the list_units filter (query searches the targets; default states mt and translated; with a single pair and no query, the find text is the query; with several pairs give a query, dir or file). DRY RUN BY DEFAULT: dryRun=true only reports; run it first, read the samples, then repeat with dryRun=false. Saves as save_translation does (origin ai, state kept, approved units skipped, a replacement that breaks the codes is refused for that unit only). Returns {dryRun, matched, changed, skipped, failed, samples (max 10, before/after), failures, next}; at most limit (default 500, max 2000) matching units per call, repeat with next as cursor (or just repeat the real run: changed units no longer match)."},
+		func(ctx context.Context, in replaceIn) (any, error) { return s.replaceInTargets(ctx, in) })
 
 	tool(s, srv, &mcp.Tool{Name: "propagate_translation", Annotations: writes,
 		Description: "Copies a unit's human translation to the identical strings that have none yet (the \"duplicates\" count of get_unit_tm)."},

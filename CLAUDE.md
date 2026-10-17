@@ -289,7 +289,33 @@ the pieces are recovered with `model.SplitTarget`:
   overwrite anything below approved, including a human's translated text (the
   old text stays in the unit's history), but never an approved unit; the user
   demotes units with Bulk "Reset to machine" or "Un-approve" in the UI.
-  Glossary tools are full CRUD. Import, export,
+  `save_translations` is the batch form (max 200 items `{id, target?, state?}`,
+  more is an error): each item runs through the same `s.save` core on its own,
+  so one failing item (code mismatch, approved, unknown id) never aborts the
+  rest. An item without `target` keeps the current text and sets the state
+  (the "mark a good MT line reviewed" case; a unit with no text is an item
+  error). It returns compact `{id, ok, error?, qa}` results, not units.
+- **`replace_in_targets`** (`api/mcp_replace.go`) is for terminology sweeps
+  after a term decision: `pairs` `[{find, replace}]` (1-50, in order, plain
+  strings; `ignoreCase`, `wholeWord` with Unicode letter/digit boundaries and
+  apostrophes inside words) over the plain target with codes inline. **It is a
+  dry run unless `dryRun=false`**, and the agent should run the dry run first.
+  - Candidates come from `s.st.List` with the ordinary filter (default
+    `states` mt+translated, `in` target; a single pair with no query searches
+    for its find text; several pairs need a query, dir or file). Pages are cut
+    to the remaining budget, so `limit` (default 500, max 2000 matching units)
+    and the `next` cursor stay exact; `Filter.where` is untouched.
+  - Each change goes through `s.save` (origin `ai`, `IfBelow: Approved`, state
+    kept). A replacement that breaks the codes is refused for that unit only
+    (checked in a dry run too); approved units are counted as `skipped`.
+  - Result: `{dryRun, matched, changed, skipped, failed, samples (10, cut to
+    ~300 runes around the change), failures (50), next}`.
+- **Reference texts in lists**: `list_units` takes `langs` (e.g. `["uk","en"]`)
+  and adds `refs {lang: text}` (cut to `PreviewRunes`, `refsTruncated`) to each
+  row via `store.UnitLangsFor`, one `unit_langs` PK query per page that leaves
+  the list query and `Filter.where` alone (about +1.5 ms for 200 rows, two
+  languages, on the 180k corpus).
+- **Glossary tools** are full CRUD. Import, export,
   bulk changes, settings, batch MT, TM fill and backup are deliberately not
   tools.
 - **Guards**: the SDK refuses a non-local `Host` (DNS rebinding), and
