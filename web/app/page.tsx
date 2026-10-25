@@ -10,6 +10,7 @@ import {
   Download,
   EllipsisVertical,
   FolderInput,
+  History,
   Languages,
   Lock,
   Plus,
@@ -18,7 +19,8 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { api, type Project } from "@/lib/api";
+import { api, type Counts, type Project } from "@/lib/api";
+import { langName } from "@/lib/lang";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -28,6 +30,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { CountsBar, donePct, Legend } from "@/components/pieces";
 import { RunningJobs } from "@/components/jobs";
 import { ExportDialog, ImportDialog, NewProjectDialog, SettingsDialog } from "@/components/project-dialogs";
@@ -96,7 +99,6 @@ export default function Home() {
 function ProjectCard({ project: p, onDialog }: { project: Project; onDialog: (k: DialogKind) => void }) {
   const qc = useQueryClient();
   const c = p.counts;
-  const untranslated = c.total - c.mt - c.translated - c.approved;
   const qa = useMutation({ mutationFn: () => api.qaRecheck(p.id), onError: (e) => toast.error(e.message) });
   const confirm = useConfirm();
   const del = useMutation({
@@ -113,6 +115,12 @@ function ProjectCard({ project: p, onDialog }: { project: Project; onDialog: (k:
     },
     onError: (e) => toast.error(`Could not delete: ${e.message}`),
   });
+  const [unit, setUnit] = useState<"strings" | "words">("strings");
+  const words = useQuery({ queryKey: ["words", p.id], queryFn: () => api.words(p.id) });
+  // The bar and the four state numbers show strings or source words.
+  const shown: Counts =
+    unit === "words" && words.data ? { ...words.data, errors: 0, warnings: 0 } : c;
+  const shownUntranslated = shown.total - shown.mt - shown.translated - shown.approved;
   const stat = (label: string, n: number, color?: string) => (
     <div className="flex flex-col">
       <span className="text-xs text-muted-foreground">{label}</span>
@@ -129,8 +137,12 @@ function ProjectCard({ project: p, onDialog }: { project: Project; onDialog: (k:
             {p.name}
           </Link>
           <p className="text-sm text-muted-foreground">
-            {p.sourceLang} → {p.targetLang} · {p.files.toLocaleString()} files · {c.total.toLocaleString()} strings ·{" "}
-            <span className="font-medium text-foreground">{donePct(c)}% human-translated</span>
+            <span title={`${p.sourceLang} → ${p.targetLang}`}>
+              {langName(p.sourceLang)} → {langName(p.targetLang)}
+            </span>{" "}
+            · {p.files.toLocaleString()} files · {c.total.toLocaleString()} strings
+            {words.data && <> · {words.data.total.toLocaleString()} words</>} ·{" "}
+            <span className="font-medium text-foreground">{donePct(c)}% translated</span>
           </p>
         </div>
         <Button asChild>
@@ -151,6 +163,11 @@ function ProjectCard({ project: p, onDialog }: { project: Project; onDialog: (k:
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => qa.mutate()}>
               <ShieldCheck /> Recheck QA
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link href={`/history?project=${p.id}`}>
+                <History /> History
+              </Link>
             </DropdownMenuItem>
             <DropdownMenuItem asChild>
               <Link href={`/glossary?project=${p.id}`}>
@@ -180,12 +197,29 @@ function ProjectCard({ project: p, onDialog }: { project: Project; onDialog: (k:
         </DropdownMenu>
       </div>
       <ExtraLangs project={p} />
-      <CountsBar counts={c} className="mt-4 h-2" />
-      <div className="mt-4 grid grid-cols-3 gap-4 sm:grid-cols-6">
-        {stat("Approved", c.approved, "var(--state-approved)")}
-        {stat("Translated", c.translated, "var(--state-translated)")}
-        {stat("Machine", c.mt, "var(--state-mt)")}
-        {stat("Untranslated", untranslated)}
+      <CountsBar counts={shown} className="mt-4 h-2" />
+      <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
+        <ToggleGroup
+          type="single"
+          size="sm"
+          variant="outline"
+          value={unit}
+          onValueChange={(v) => v && setUnit(v as "strings" | "words")}
+        >
+          <ToggleGroupItem value="strings" className="px-2 text-xs data-[state=on]:bg-accent data-[state=on]:text-foreground">
+            Strings
+          </ToggleGroupItem>
+          <ToggleGroupItem value="words" className="px-2 text-xs data-[state=on]:bg-accent data-[state=on]:text-foreground">
+            Words
+          </ToggleGroupItem>
+        </ToggleGroup>
+        {unit === "words" && !words.data && <span>counting…</span>}
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-4 sm:grid-cols-6">
+        {stat("Approved", shown.approved, "var(--state-approved)")}
+        {stat("Translated", shown.translated, "var(--state-translated)")}
+        {stat("Machine", shown.mt, "var(--state-mt)")}
+        {stat("Untranslated", shownUntranslated)}
         {stat("QA errors", c.errors, c.errors ? "var(--destructive)" : undefined)}
         {stat("QA warnings", c.warnings)}
       </div>
@@ -214,7 +248,9 @@ function ExtraLangs({ project: p }: { project: Project }) {
       {langs.data.map((l) => (
         <span key={l.lang} className="group inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5">
           {l.locked && <Lock className="size-3 text-muted-foreground" aria-label="locked (read-only)" />}
-          <span className="font-medium">{l.lang}</span>
+          <span className="font-medium" title={l.lang}>
+            {langName(l.lang)}
+          </span>
           <span className="text-xs tabular-nums text-muted-foreground">{l.units.toLocaleString()} strings</span>
           <button
             type="button"
@@ -233,6 +269,22 @@ function ExtraLangs({ project: p }: { project: Project }) {
   );
 }
 
+/** "data:host:9696/app" → "Data server host:9696/app", and so on. */
+function targetLabel(name: string): string {
+  const i = name.indexOf(":");
+  const rest = name.slice(i + 1);
+  switch (name.slice(0, i)) {
+    case "dir":
+      return `Folder ${rest}`;
+    case "sftp":
+      return `SFTP ${rest}`;
+    case "data":
+      return `Data server ${rest}`;
+    default:
+      return name;
+  }
+}
+
 function BackupCard() {
   const info = useQuery({ queryKey: ["info"], queryFn: api.info, refetchInterval: 60_000 });
   const run = useMutation({ mutationFn: api.backupNow, onError: (e) => toast.error(e.message) });
@@ -245,7 +297,7 @@ function BackupCard() {
         {b.configured ? (
           <>
             <p>
-              Backups to <span className="font-medium">{b.targets?.join(", ")}</span>
+              Backups to <span className="font-medium">{b.targets?.map(targetLabel).join(", ")}</span>
               {b.interval !== "0s" && <> · every {b.interval} when there are edits</>}
             </p>
             <p className="text-muted-foreground">

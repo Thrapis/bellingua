@@ -312,11 +312,11 @@ func newWriter(ctx context.Context, tx *sql.Tx, projectID int64, runner *qa.Runn
 		return nil, err
 	}
 	if w.ins, err = tx.PrepareContext(ctx, `INSERT INTO units (project_id, file_id, ord, key, source, source_pieces,
-		target, target_pieces, context, state, qa, updated_at, source_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`); err != nil {
+		target, target_pieces, context, state, qa, updated_at, source_hash, words) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`); err != nil {
 		return nil, err
 	}
 	if w.upd, err = tx.PrepareContext(ctx, `UPDATE units SET ord = ?, source = ?, source_pieces = ?, target = ?,
-		target_pieces = ?, context = ?, state = ?, qa = ?, changed = ?, obsolete = 0, updated_at = ?, source_hash = ? WHERE id = ?`); err != nil {
+		target_pieces = ?, context = ?, state = ?, qa = ?, changed = ?, obsolete = 0, updated_at = ?, source_hash = ?, words = ? WHERE id = ?`); err != nil {
 		return nil, err
 	}
 	if w.hbase, err = tx.PrepareContext(ctx, `INSERT INTO history (unit_id, project_id, target, state, origin, at)
@@ -398,7 +398,7 @@ func (w *writer) writeFile(r parsed, stats *Stats) error {
 	if !w.existing[fileID] {
 		for i, u := range r.units {
 			if _, err := w.ins.ExecContext(w.ctx, w.projectID, fileID, i, u.key, model.Plain(u.src), model.EncodePieces(u.src),
-				plainOrNil(u.tgt), model.EncodePieces(u.tgt), u.context, u.state, u.mask, w.now, store.SourceHash(model.Plain(u.src))); err != nil {
+				plainOrNil(u.tgt), model.EncodePieces(u.tgt), u.context, u.state, u.mask, w.now, store.SourceHash(model.Plain(u.src)), model.Words(u.src)); err != nil {
 				return err
 			}
 		}
@@ -447,7 +447,7 @@ func (w *writer) merge(fileID int64, r parsed, stats *Stats) error {
 		e, ok := old[u.key]
 		if !ok {
 			if _, err := w.ins.ExecContext(w.ctx, w.projectID, fileID, i, u.key, model.Plain(u.src), model.EncodePieces(u.src),
-				plainOrNil(u.tgt), model.EncodePieces(u.tgt), u.context, u.state, u.mask, w.now, store.SourceHash(model.Plain(u.src))); err != nil {
+				plainOrNil(u.tgt), model.EncodePieces(u.tgt), u.context, u.state, u.mask, w.now, store.SourceHash(model.Plain(u.src)), model.Words(u.src)); err != nil {
 				return err
 			}
 			stats.Inserted++
@@ -496,7 +496,7 @@ func (w *writer) merge(fileID int64, r parsed, stats *Stats) error {
 			}
 		}
 		if _, err := w.upd.ExecContext(w.ctx, i, src, model.EncodePieces(u.src), tgt, tgtBlob, context,
-			state, mask, changed, w.now, store.SourceHash(src), e.id); err != nil {
+			state, mask, changed, w.now, store.SourceHash(src), model.Words(u.src), e.id); err != nil {
 			return err
 		}
 		stats.Updated++

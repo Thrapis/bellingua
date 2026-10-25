@@ -101,6 +101,7 @@ func (s *Server) Handler() http.Handler {
 	h("POST /api/projects", s.createProject)
 	h("GET /api/projects/{pid}", s.getProject)
 	h("DELETE /api/projects/{pid}", s.deleteProject)
+	h("GET /api/projects/{pid}/words", s.wordCounts)
 	h("PUT /api/projects/{pid}/settings", s.saveSettings)
 	h("GET /api/projects/{pid}/tree", s.tree)
 	h("GET /api/projects/{pid}/units", s.listUnits)
@@ -377,6 +378,25 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	return ok(w, p)
+}
+
+// wordCounts answers the project's source-word totals per state.
+func (s *Server) wordCounts(w http.ResponseWriter, r *http.Request) error {
+	if etag(w, r, s.st.Rev()) {
+		return nil
+	}
+	id, err := pathID(r, "pid")
+	if err != nil {
+		return err
+	}
+	if _, err := s.st.Project(r.Context(), id); err != nil {
+		return err
+	}
+	wc, err := s.st.WordCounts(r.Context(), id)
+	if err != nil {
+		return err
+	}
+	return ok(w, wc)
 }
 
 func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) error {

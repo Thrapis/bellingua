@@ -247,3 +247,32 @@ func TestSearchAndFilters(t *testing.T) {
 		t.Errorf("after bulk: %v %+v", u.State, u.History)
 	}
 }
+
+// units.words follows the source: set on a fresh import (codes are not
+// words) and refreshed when a re-import changes the source.
+func TestImportKeepsWordsCurrent(t *testing.T) {
+	ctx, st, p, runner := setup(t)
+	dir := t.TempDir()
+	writeXLIFF(t, dir, "a.xlf",
+		xliff.Unit{ID: "k1", Source: []model.Piece{tx("Press "), cd("{KEY}"), tx(" to jump")}},
+		xliff.Unit{ID: "k2", Source: []model.Piece{tx("one two")}},
+	)
+	if _, err := Import(ctx, st, runner, Options{ProjectID: p.ID, Root: dir}); err != nil {
+		t.Fatal(err)
+	}
+	w, err := st.WordCounts(ctx, p.ID)
+	if err != nil || w.Total != 5 {
+		t.Fatalf("after import: %+v %v (want 5 words)", w, err)
+	}
+
+	writeXLIFF(t, dir, "a.xlf",
+		xliff.Unit{ID: "k1", Source: []model.Piece{tx("Press "), cd("{KEY}"), tx(" to jump")}},
+		xliff.Unit{ID: "k2", Source: []model.Piece{tx("one two three four")}},
+	)
+	if _, err := Import(ctx, st, runner, Options{ProjectID: p.ID, Root: dir}); err != nil {
+		t.Fatal(err)
+	}
+	if w, err = st.WordCounts(ctx, p.ID); err != nil || w.Total != 7 {
+		t.Fatalf("after re-import: %+v %v (want 7 words)", w, err)
+	}
+}

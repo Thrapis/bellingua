@@ -26,6 +26,9 @@ export type Project = {
   files: number;
 };
 
+/** Source-word totals; untranslated = total - mt - translated - approved. */
+export type Words = { total: number; mt: number; translated: number; approved: number };
+
 export type TreeNode = { name: string; path: string; file?: number; counts: Counts };
 
 export type Row = {
@@ -256,6 +259,7 @@ export const api = {
   info: () => request<Info>("GET", "/info"),
   projects: () => request<Project[]>("GET", "/projects"),
   project: (id: number) => request<Project>("GET", `/projects/${id}`),
+  words: (id: number) => request<Words>("GET", `/projects/${id}/words`),
   createProject: (b: { name: string; sourceLang: string; targetLang: string }) =>
     request<Project>("POST", "/projects", b),
   deleteProject: (id: number) => request<void>("DELETE", `/projects/${id}`),

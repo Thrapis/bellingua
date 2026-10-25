@@ -99,7 +99,7 @@ export function RunningJobs({ project }: { project?: number }) {
             <LoaderCircle className="size-4 animate-spin text-muted-foreground" />
             <span className="w-40 shrink-0 font-medium">{kindLabel[j.kind]}</span>
             <Progress value={pct} className="h-1.5 flex-1" />
-            <span className="w-36 shrink-0 text-right tabular-nums text-muted-foreground">
+            <span className="shrink-0 whitespace-nowrap text-right tabular-nums text-muted-foreground">
               {j.total ? `${j.done.toLocaleString()} / ${j.total.toLocaleString()}` : (j.message ?? "…")}
             </span>
             <Button variant="ghost" size="icon" className="size-6" onClick={() => api.cancelJob(j.id)} title="Cancel">

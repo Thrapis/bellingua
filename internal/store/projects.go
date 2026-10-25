@@ -7,6 +7,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/Thrapis/bellingua/internal/model"
 	"github.com/Thrapis/bellingua/internal/qa"
 )
 
@@ -64,6 +65,42 @@ func scanProject(sc interface{ Scan(...any) error }) (*Project, error) {
 		return nil, err
 	}
 	return &p, nil
+}
+
+// Words are source-word totals of a project's non-obsolete units: all of them
+// and the share per workflow state (untranslated = Total - the other three).
+type Words struct {
+	Total      int64 `json:"total"`
+	MT         int64 `json:"mt"`
+	Translated int64 `json:"translated"`
+	Approved   int64 `json:"approved"`
+}
+
+// WordCounts sums units.words per state from the covering partial index.
+func (s *Store) WordCounts(ctx context.Context, projectID int64) (Words, error) {
+	var w Words
+	rows, err := s.R.QueryContext(ctx, `SELECT state, sum(words) FROM units
+		WHERE project_id = ? AND obsolete = 0 GROUP BY state`, projectID)
+	if err != nil {
+		return w, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var state, n int64
+		if err := rows.Scan(&state, &n); err != nil {
+			return w, err
+		}
+		w.Total += n
+		switch model.State(state) {
+		case model.MT:
+			w.MT = n
+		case model.Translated:
+			w.Translated = n
+		case model.Approved:
+			w.Approved = n
+		}
+	}
+	return w, rows.Err()
 }
 
 // Projects lists all projects with their counters.

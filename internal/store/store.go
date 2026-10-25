@@ -21,6 +21,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/Thrapis/bellingua/internal/model"
 	"github.com/Thrapis/bellingua/internal/qa"
 )
 
@@ -45,6 +46,9 @@ var schemaV6 string
 //go:embed schema_v7.sql
 var schemaV7 string
 
+//go:embed schema_v8.sql
+var schemaV8 string
+
 // migration is SQL plus an optional Go step run in the same transaction.
 type migration struct {
 	sql  string
@@ -61,6 +65,7 @@ var migrations = []migration{
 	{sql: schemaV5},
 	{sql: schemaV6},
 	{sql: schemaV7},
+	{sql: schemaV8, post: backfillWords},
 }
 
 // backfillSourceHash fills units.source_hash for existing rows.
@@ -94,6 +99,48 @@ func backfillSourceHash(ctx context.Context, tx *sql.Tx) error {
 	defer stmt.Close()
 	for _, p := range all {
 		if _, err := stmt.ExecContext(ctx, p.hash, p.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// backfillWords fills units.words for existing rows from the source pieces.
+func backfillWords(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, "SELECT id, source, source_pieces FROM units")
+	if err != nil {
+		return err
+	}
+	type pair struct{ id, words int64 }
+	var all []pair
+	for rows.Next() {
+		var id int64
+		var src string
+		var blob []byte
+		if err := rows.Scan(&id, &src, &blob); err != nil {
+			rows.Close()
+			return err
+		}
+		ps, err := model.DecodePieces(blob, src)
+		if err != nil {
+			rows.Close()
+			return fmt.Errorf("unit %d: %w", id, err)
+		}
+		if w := model.Words(ps); w > 0 {
+			all = append(all, pair{id, int64(w)})
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	stmt, err := tx.PrepareContext(ctx, "UPDATE units SET words = ? WHERE id = ?")
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, p := range all {
+		if _, err := stmt.ExecContext(ctx, p.words, p.id); err != nil {
 			return err
 		}
 	}
