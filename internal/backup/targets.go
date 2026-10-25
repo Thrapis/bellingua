@@ -79,6 +79,14 @@ func (d LocalDir) Remove(_ context.Context, name string) error {
 	return os.Remove(filepath.Join(string(d), name))
 }
 
+func (d LocalDir) Size(_ context.Context, name string) (int64, error) {
+	fi, err := os.Stat(filepath.Join(string(d), name))
+	if err != nil {
+		return 0, err
+	}
+	return fi.Size(), nil
+}
+
 func (LocalDir) Close() error { return nil }
 
 // SFTP is a remote target reached over SSH with key authentication. The
@@ -229,6 +237,17 @@ func (s *SFTP) Remove(_ context.Context, name string) error {
 	return s.with(func(c *sftp.Client) error { return c.Remove(s.remote(name)) })
 }
 
+func (s *SFTP) Size(_ context.Context, name string) (n int64, err error) {
+	err = s.with(func(c *sftp.Client) error {
+		fi, err := c.Stat(s.remote(name))
+		if err == nil {
+			n = fi.Size()
+		}
+		return err
+	})
+	return n, err
+}
+
 func (s *SFTP) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -360,21 +379,33 @@ func (d *DataServer) Put(ctx context.Context, name string, r io.Reader) error {
 	return resp.Body.Close()
 }
 
+type dataObject struct {
+	Key  string `json:"key"`
+	Size int64  `json:"size"`
+}
+
+// objects lists the keys that start with prefix.
+func (d *DataServer) objects(ctx context.Context, prefix string) ([]dataObject, error) {
+	resp, err := d.do(ctx, http.MethodGet, d.url("")+"?prefix="+url.QueryEscape(prefix), nil, -1)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var objs []dataObject
+	if err := json.NewDecoder(resp.Body).Decode(&objs); err != nil {
+		return nil, fmt.Errorf("listing: %w", err)
+	}
+	return objs, nil
+}
+
 func (d *DataServer) List(ctx context.Context) ([]string, error) {
 	pfx := ""
 	if f := strings.Trim(d.cfg.Folder, "/"); f != "" {
 		pfx = f + "/"
 	}
-	resp, err := d.do(ctx, http.MethodGet, d.url("")+"?prefix="+url.QueryEscape(pfx), nil, -1)
+	objs, err := d.objects(ctx, pfx)
 	if err != nil {
 		return nil, err
-	}
-	defer resp.Body.Close()
-	var objs []struct {
-		Key string `json:"key"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&objs); err != nil {
-		return nil, fmt.Errorf("listing: %w", err)
 	}
 	var out []string
 	for _, o := range objs {
@@ -383,6 +414,21 @@ func (d *DataServer) List(ctx context.Context) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// Size reads the snapshot's size from the listing.
+func (d *DataServer) Size(ctx context.Context, name string) (int64, error) {
+	key := d.key(name)
+	objs, err := d.objects(ctx, key)
+	if err != nil {
+		return 0, err
+	}
+	for _, o := range objs {
+		if o.Key == key {
+			return o.Size, nil
+		}
+	}
+	return 0, os.ErrNotExist
 }
 
 func (d *DataServer) Get(ctx context.Context, name string, w io.Writer) error {

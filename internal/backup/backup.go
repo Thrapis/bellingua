@@ -384,6 +384,50 @@ func (m *Manager) Status() Status {
 	return s
 }
 
+// Sizer is implemented by targets that can tell a snapshot's stored size.
+type Sizer interface {
+	Size(ctx context.Context, name string) (int64, error)
+}
+
+// loadLast learns the newest snapshot already on the targets (a backup made
+// by an earlier run), so the status does not claim there is none. It never
+// replaces a result of this run.
+func (m *Manager) loadLast(ctx context.Context) {
+	var best *Result
+	var bestTarget Target
+	for _, t := range m.targets {
+		names, err := snapshots(ctx, t)
+		if err != nil {
+			m.log.Warn("backup: listing snapshots", "target", t.Name(), "err", err)
+			continue
+		}
+		if len(names) == 0 {
+			continue
+		}
+		name := names[len(names)-1]
+		at, err := time.ParseInLocation(stamp, strings.TrimSuffix(strings.TrimPrefix(name, prefix), suffix), time.Local)
+		if err != nil {
+			continue
+		}
+		if best == nil || at.After(best.At) {
+			best, bestTarget = &Result{Name: name, At: at}, t
+		}
+	}
+	if best == nil {
+		return
+	}
+	if sz, ok := bestTarget.(Sizer); ok {
+		if n, err := sz.Size(ctx, best.Name); err == nil {
+			best.Size = n
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.last == nil {
+		m.last = best
+	}
+}
+
 // ErrRunning is returned when a backup is already in progress.
 var ErrRunning = errors.New("backup already running")
 
@@ -424,6 +468,7 @@ func (m *Manager) Loop(ctx context.Context) {
 		<-ctx.Done()
 		return
 	}
+	go m.loadLast(ctx)
 	var tick <-chan time.Time
 	if m.cfg.Interval > 0 {
 		t := time.NewTicker(m.cfg.Interval)

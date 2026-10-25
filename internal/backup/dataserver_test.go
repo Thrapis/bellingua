@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -140,5 +141,41 @@ func TestDataServerErrors(t *testing.T) {
 
 	if err := target.Remove(ctx, "bellingua-missing.db.zst"); err != nil {
 		t.Errorf("removing a missing snapshot: %v", err)
+	}
+}
+
+// A manager started after earlier backups reports the newest snapshot of its
+// targets as "last", with the stored size, instead of "No backup yet".
+func TestManagerLoadsLastFromTargets(t *testing.T) {
+	ctx := context.Background()
+	st := newDB(t, "first")
+	defer st.Close()
+	addUnit(t, st, "first", "Привет, мир")
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	f, target := newDataServer(t, "")
+	res, err := Run(ctx, st.Path, []Target{target}, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := NewManager(st, config.Backup{Data: &target.cfg}, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if m.Status().Last != nil {
+		t.Fatal("nothing should be known before the targets are asked")
+	}
+	m.loadLast(ctx)
+	last := m.Status().Last
+	if last == nil || last.Name != res.Name {
+		t.Fatalf("last = %+v", last)
+	}
+	if want := int64(len(f.blobs[res.Name])); last.Size != want || want == 0 {
+		t.Errorf("size = %d, want %d", last.Size, want)
+	}
+	if last.At.IsZero() || time.Since(last.At) > time.Minute {
+		t.Errorf("at = %v", last.At)
 	}
 }

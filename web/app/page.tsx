@@ -303,7 +303,8 @@ function BackupCard() {
             <p className="text-muted-foreground">
               {b.last ? (
                 <>
-                  Last: {new Date(b.last.at).toLocaleString()} · {(b.last.size / 1048576).toFixed(1)} MB
+                  Last: {new Date(b.last.at).toLocaleString()}
+                  {b.last.size > 0 && <> · {(b.last.size / 1048576).toFixed(1)} MB</>}
                 </>
               ) : (
                 "No backup yet"
