@@ -53,6 +53,9 @@ func Targets(cfg config.Backup) ([]Target, error) {
 	if cfg.SFTP != nil {
 		out = append(out, &SFTP{cfg: *cfg.SFTP})
 	}
+	if cfg.Data != nil {
+		out = append(out, &DataServer{cfg: *cfg.Data})
+	}
 	return out, nil
 }
 
@@ -157,7 +160,7 @@ func Run(ctx context.Context, dbPath string, targets []Target, keep int) (Result
 	start := time.Now()
 	res := Result{Name: prefix + start.Format(stamp) + suffix, At: start}
 	if len(targets) == 0 {
-		return res, errors.New("backup: no target configured (set backup.dir and/or backup.sftp)")
+		return res, errors.New("backup: no target configured (set backup.dir, backup.sftp and/or backup.data)")
 	}
 	f, err := os.CreateTemp(filepath.Dir(dbPath), ".backup-*.zst")
 	if err != nil {

@@ -228,7 +228,7 @@ func cmdRestore(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("restore", flag.ExitOnError)
 	load := commonFlags(fs)
 	from := fs.String("from", "latest", `snapshot name, or "latest"`)
-	target := fs.String("target", "", "target to restore from: dir | sftp (default: sftp if configured)")
+	target := fs.String("target", "", "target to restore from: dir | sftp | data (default: a remote one if configured)")
 	fs.Parse(args)
 	e, err := load()
 	if err != nil {
@@ -245,11 +245,17 @@ func cmdRestore(ctx context.Context, args []string) error {
 	}()
 	var t backup.Target
 	for _, c := range targets {
-		_, isSFTP := c.(*backup.SFTP)
+		kind, remote := "dir", false
+		switch c.(type) {
+		case *backup.SFTP:
+			kind, remote = "sftp", true
+		case *backup.DataServer:
+			kind, remote = "data", true
+		}
 		switch {
-		case *target == "sftp" && isSFTP, *target == "dir" && !isSFTP:
+		case *target == kind:
 			t = c
-		case *target == "" && (t == nil || isSFTP):
+		case *target == "" && (t == nil || remote):
 			t = c
 		}
 	}

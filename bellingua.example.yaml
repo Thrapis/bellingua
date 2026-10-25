@@ -36,3 +36,13 @@ backup:
   #   key: ~/.ssh/id_ed25519          # unencrypted private key (ssh-agent is not used)
   #   knownHosts: ~/.ssh/known_hosts  # connect once with `ssh` first so the host key is recorded
   #   dir: /home/backup/bellingua
+  # go-data-server (https://github.com/Thrapis/go-data-server) on the VPS. Not set by default.
+  # The token comes from `token`, else from the BELLINGUA_DATA_TOKEN environment variable.
+  # One snapshot is one upload: keep it under the server's DATA_MAX_BODY (default 50 MiB).
+  # data:
+  #   url: https://203.0.113.5:9696
+  #   app: bellingua
+  #   token: ...
+  #   folder: laptop                  # optional key prefix inside the app
+  #   caFile: ~/.bellingua/ca.pem     # optional; only for a self-signed certificate
+  #   timeout: 10m

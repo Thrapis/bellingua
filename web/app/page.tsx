@@ -262,7 +262,7 @@ function BackupCard() {
           </>
         ) : (
           <p className="text-muted-foreground">
-            Backups are off. Set <code>backup.dir</code> and/or <code>backup.sftp</code> in bellingua.yaml.
+            Backups are off. Set <code>backup.dir</code>, <code>backup.sftp</code> and/or <code>backup.data</code> in bellingua.yaml.
           </p>
         )}
       </div>

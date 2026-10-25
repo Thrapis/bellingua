@@ -2,10 +2,15 @@ package backup
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -239,6 +244,173 @@ func (s *SFTP) closeLocked() {
 		s.ssh.Close()
 	}
 	s.client, s.ssh = nil, nil
+}
+
+// DataServer is a go-data-server app reached over HTTP(S) with a bearer
+// token. A PUT stores the whole blob or nothing, so no temporary name is used.
+type DataServer struct {
+	cfg config.DataServer
+
+	once   sync.Once
+	client *http.Client
+	err    error
+}
+
+func (d *DataServer) Name() string {
+	host := d.cfg.URL
+	if u, err := url.Parse(d.cfg.URL); err == nil {
+		host = u.Host
+	}
+	n := "data:" + host + "/" + d.cfg.App
+	if d.cfg.Folder != "" {
+		n += "/" + strings.Trim(d.cfg.Folder, "/")
+	}
+	return n
+}
+
+func (d *DataServer) http() (*http.Client, error) {
+	d.once.Do(func() {
+		c := &http.Client{Timeout: d.cfg.Timeout}
+		if d.cfg.CAFile != "" {
+			pem, err := os.ReadFile(expandHome(d.cfg.CAFile))
+			if err != nil {
+				d.err = fmt.Errorf("caFile: %w", err)
+				return
+			}
+			pool := x509.NewCertPool()
+			if !pool.AppendCertsFromPEM(pem) {
+				d.err = fmt.Errorf("caFile %s: no certificates found", d.cfg.CAFile)
+				return
+			}
+			tr := http.DefaultTransport.(*http.Transport).Clone()
+			tr.TLSClientConfig = &tls.Config{RootCAs: pool}
+			c.Transport = tr
+		}
+		d.client = c
+	})
+	return d.client, d.err
+}
+
+// key is the object key of a snapshot name inside the folder.
+func (d *DataServer) key(name string) string {
+	if f := strings.Trim(d.cfg.Folder, "/"); f != "" {
+		return f + "/" + name
+	}
+	return name
+}
+
+func (d *DataServer) url(key string) string {
+	u := strings.TrimRight(d.cfg.URL, "/") + "/api/" + url.PathEscape(d.cfg.App)
+	if key == "" {
+		return u
+	}
+	segs := strings.Split(key, "/")
+	for i, s := range segs {
+		segs[i] = url.PathEscape(s)
+	}
+	return u + "/" + strings.Join(segs, "/")
+}
+
+// do sends a request and returns the response for a 2xx status; any other
+// status becomes an error carrying the server's message.
+func (d *DataServer) do(ctx context.Context, method, target string, body io.Reader, size int64) (*http.Response, error) {
+	c, err := d.http()
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, method, target, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+d.cfg.Token)
+	if body != nil && size >= 0 {
+		req.ContentLength = size
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode/100 == 2 {
+		return resp, nil
+	}
+	msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	resp.Body.Close()
+	err = fmt.Errorf("%s %s: %s: %s", method, path.Base(target), resp.Status, strings.TrimSpace(string(msg)))
+	if resp.StatusCode == http.StatusRequestEntityTooLarge {
+		err = fmt.Errorf("%w (the snapshot exceeds the server's DATA_MAX_BODY; raise it on the server)", err)
+	}
+	return nil, err
+}
+
+func (d *DataServer) Put(ctx context.Context, name string, r io.Reader) error {
+	size := int64(-1)
+	if f, ok := r.(*os.File); ok {
+		// Run hands over a temp file; a known length avoids chunked bodies.
+		if st, err := f.Stat(); err == nil {
+			if off, err := f.Seek(0, io.SeekCurrent); err == nil {
+				size = st.Size() - off
+			}
+		}
+	}
+	resp, err := d.do(ctx, http.MethodPut, d.url(d.key(name)), r, size)
+	if err != nil {
+		return err
+	}
+	io.Copy(io.Discard, resp.Body)
+	return resp.Body.Close()
+}
+
+func (d *DataServer) List(ctx context.Context) ([]string, error) {
+	pfx := ""
+	if f := strings.Trim(d.cfg.Folder, "/"); f != "" {
+		pfx = f + "/"
+	}
+	resp, err := d.do(ctx, http.MethodGet, d.url("")+"?prefix="+url.QueryEscape(pfx), nil, -1)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var objs []struct {
+		Key string `json:"key"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&objs); err != nil {
+		return nil, fmt.Errorf("listing: %w", err)
+	}
+	var out []string
+	for _, o := range objs {
+		if n, ok := strings.CutPrefix(o.Key, pfx); ok && n != "" && !strings.Contains(n, "/") {
+			out = append(out, n)
+		}
+	}
+	return out, nil
+}
+
+func (d *DataServer) Get(ctx context.Context, name string, w io.Writer) error {
+	resp, err := d.do(ctx, http.MethodGet, d.url(d.key(name)), nil, -1)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, err = io.Copy(w, resp.Body)
+	return err
+}
+
+func (d *DataServer) Remove(ctx context.Context, name string) error {
+	resp, err := d.do(ctx, http.MethodDelete, d.url(d.key(name)), nil, -1)
+	if err != nil {
+		if strings.Contains(err.Error(), "404") {
+			return nil // already gone
+		}
+		return err
+	}
+	return resp.Body.Close()
+}
+
+func (d *DataServer) Close() error {
+	if d.client != nil {
+		d.client.CloseIdleConnections()
+	}
+	return nil
 }
 
 // ctxReader stops an upload when ctx is cancelled.

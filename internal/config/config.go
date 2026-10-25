@@ -4,6 +4,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"runtime"
 	"time"
@@ -53,14 +54,29 @@ type Provider struct {
 	Timeout time.Duration `yaml:"timeout"`
 }
 
-// Backup configures snapshots of the database. With neither Dir nor SFTP
-// set, backups are disabled.
+// Backup configures snapshots of the database. With none of Dir, SFTP
+// and Data set, backups are disabled.
 type Backup struct {
 	Interval time.Duration `yaml:"interval"` // automatic snapshot period when there were edits; 0 = off
 	Keep     int           `yaml:"keep"`     // snapshots to retain per target
 	Dir      string        `yaml:"dir"`      // local (or mounted) directory target
 	SFTP     *SFTP         `yaml:"sftp"`     // remote target over SSH
+	Data     *DataServer   `yaml:"data"`     // go-data-server over HTTP(S)
 }
+
+// DataServer is a go-data-server app (https://github.com/Thrapis/go-data-server).
+// The token comes from the file, else from $BELLINGUA_DATA_TOKEN.
+type DataServer struct {
+	URL     string        `yaml:"url"`     // base URL, e.g. https://203.0.113.5:9696
+	App     string        `yaml:"app"`     // the app name the token belongs to
+	Token   string        `yaml:"token"`   // bearer token
+	Folder  string        `yaml:"folder"`  // optional key prefix, e.g. "laptop"
+	CAFile  string        `yaml:"caFile"`  // optional PEM bundle to trust instead of the system roots
+	Timeout time.Duration `yaml:"timeout"` // per request; default 10m
+}
+
+// DataTokenEnv names the environment variable used when Token is empty.
+const DataTokenEnv = "BELLINGUA_DATA_TOKEN"
 
 // SFTP is an SSH target (e.g. the VPS). Only key authentication is supported.
 type SFTP struct {
@@ -136,6 +152,23 @@ func Load(path string, optional bool) (Config, error) {
 		}
 		if s.Port == 0 {
 			s.Port = 22
+		}
+	}
+	if d := c.Backup.Data; d != nil {
+		if d.URL == "" || d.App == "" {
+			return c, fmt.Errorf("%s: backup.data needs url and app", path)
+		}
+		if u, err := url.Parse(d.URL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return c, fmt.Errorf("%s: backup.data.url must be an http(s) URL", path)
+		}
+		if d.Token == "" {
+			d.Token = os.Getenv(DataTokenEnv)
+		}
+		if d.Token == "" {
+			return c, fmt.Errorf("%s: backup.data needs a token (token: in the file or $%s)", path, DataTokenEnv)
+		}
+		if d.Timeout <= 0 {
+			d.Timeout = 10 * time.Minute
 		}
 	}
 	return c, nil

@@ -258,8 +258,14 @@ the pieces are recovered with `model.SplitTarget`:
   3. Compress with zstd.
   4. Upload each target under a `.part` name, then rename.
 - Restore rebuilds FTS when that flag is set.
-- Targets: `LocalDir` and `SFTP`. SFTP uses key auth and `known_hosts` only.
-  The test server is an in-process SSH server with `sftp.InMemHandler`.
+- Targets: `LocalDir`, `SFTP` and `DataServer`. SFTP uses key auth and
+  `known_hosts` only. The test server is an in-process SSH server with
+  `sftp.InMemHandler`.
+- `DataServer` talks to a go-data-server app (`PUT/GET/DELETE /api/{app}/{key}`,
+  bearer token from `backup.data.token`, else `$BELLINGUA_DATA_TOKEN`, resolved
+  in `config.Load`). A PUT is atomic, so there is no `.part` rename. One
+  snapshot is one upload, capped by the server's `DATA_MAX_BODY`; a 413 says
+  so. Tests use an `httptest` fake of that API.
 - `Manager.Loop` backs up on an interval when `Rev` changed, and once more on
   shutdown.
 

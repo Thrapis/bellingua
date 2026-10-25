@@ -169,12 +169,19 @@ providers and the backup targets. Every command also accepts `-db`.
 3. Set `backup.sftp` in `bellingua.yaml`. Nothing needs to be installed on the
    VPS.
 
+Or, if the VPS runs [go-data-server](https://github.com/Thrapis/go-data-server),
+set `backup.data` (`url`, `app`, and the app's token in `token` or in the
+`BELLINGUA_DATA_TOKEN` environment variable). Each snapshot is one upload, so
+it must fit the server's `DATA_MAX_BODY` (default 50 MiB); a larger one fails
+with a 413 that says so. Prefer an `https://` URL: the token is sent as a
+bearer header.
+
 Useful commands:
 
 ```powershell
 bellingua backup                 # snapshot now
 bellingua backup -list           # list snapshots on every target
-bellingua restore                # latest snapshot from SFTP (or -target dir); stop the server first
+bellingua restore                # latest snapshot from the remote target (or -target dir|sftp|data); stop the server first
 bellingua restore -from bellingua-20260925-204019.db.zst
 ```
 
@@ -190,7 +197,7 @@ keeps the previous database as `bellingua.db.bak`.
 | `import -project P -in DIR [-format xliff\|crowdin-csv] [-source-lang en -target-lang de]` | import or re-import a tree; creates the project if needed (languages default to the XLIFF header) |
 | `export -project P -out DIR [-format …] [-min-state mt\|translated\|approved]` | export a tree mirroring the import |
 | `qa -project P` | recompute QA for all units (after changing checks) |
-| `backup [-list]`, `restore [-from NAME] [-target dir\|sftp]` | see above |
+| `backup [-list]`, `restore [-from NAME] [-target dir\|sftp\|data]` | see above |
 | `projects` | list projects with progress |
 | `mcp [-listen addr]` | MCP server over stdio, relayed to a running `serve` (see below) |
 
