@@ -179,6 +179,8 @@ export type Job = {
   done: number;
   total: number;
   message?: string;
+  stage?: "snapshot" | "upload"; // backup
+  speed?: number; // bytes per second, when the job knows it
   error?: string;
   result?: Record<string, unknown>;
   started: string;

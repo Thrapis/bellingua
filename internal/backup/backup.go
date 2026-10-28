@@ -63,6 +63,18 @@ func Targets(cfg config.Backup) ([]Target, error) {
 // dbPath to w. The full-text index is about half the database and can be
 // rebuilt from the units, so it is emptied in the copy (Restore rebuilds it).
 func Snapshot(ctx context.Context, dbPath string, w io.Writer) error {
+	return snapshot(ctx, dbPath, w, nil)
+}
+
+// Share of the snapshot stage taken by each step (the bar's weights); the
+// rest is compression.
+const (
+	copyShare  = 0.40
+	indexShare = 0.25
+)
+
+func snapshot(ctx context.Context, dbPath string, w io.Writer, report ProgressFunc) error {
+	report.send(Progress{Stage: "snapshot", Message: "Copying the database"})
 	tmp, err := os.CreateTemp(filepath.Dir(dbPath), ".snapshot-*.db")
 	if err != nil {
 		return err
@@ -77,11 +89,45 @@ func Snapshot(ctx context.Context, dbPath string, w io.Writer) error {
 		return err
 	}
 	db.SetMaxOpenConns(1)
+
+	// The copy grows towards about the size of the source file.
+	stopPoll := make(chan struct{})
+	pollDone := make(chan struct{})
+	go func() {
+		defer close(pollDone)
+		var total int64
+		if fi, err := os.Stat(dbPath); err == nil {
+			total = fi.Size()
+		}
+		var m meter
+		tick := time.NewTicker(250 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-stopPoll:
+				return
+			case <-tick.C:
+				if fi, err := os.Stat(tmpPath); err == nil && total > 0 {
+					n := fi.Size()
+					report.send(Progress{
+						Stage:    "snapshot",
+						Message:  fmt.Sprintf("Copying the database · %s of ~%s", humanBytes(n), humanBytes(total)),
+						Fraction: min(float64(n)/float64(total), 0.99) * copyShare,
+						Speed:    m.rate(n),
+					})
+				}
+			}
+		}
+	}()
 	_, err = db.ExecContext(ctx, "VACUUM INTO ?", tmpPath)
+	close(stopPoll)
+	<-pollDone
 	db.Close()
 	if err != nil {
 		return fmt.Errorf("vacuum into: %w", err)
 	}
+
+	report.send(Progress{Stage: "snapshot", Message: "Dropping the search index (rebuilt on restore)", Fraction: copyShare})
 	if err := stripIndex(ctx, tmpPath); err != nil {
 		return fmt.Errorf("strip index: %w", err)
 	}
@@ -91,15 +137,32 @@ func Snapshot(ctx context.Context, dbPath string, w io.Writer) error {
 		return err
 	}
 	defer src.Close()
+	fi, err := src.Stat()
+	if err != nil {
+		return err
+	}
+	var m meter
+	in := &countingReader{r: src, size: fi.Size(), onNew: func(n int64) {
+		report.send(Progress{
+			Stage:    "snapshot",
+			Message:  fmt.Sprintf("Compressing · %s of %s", humanBytes(n), humanBytes(fi.Size())),
+			Fraction: copyShare + indexShare + float64(n)/float64(max(fi.Size(), 1))*(1-copyShare-indexShare),
+			Speed:    m.rate(n),
+		})
+	}}
 	enc, err := zstd.NewWriter(w, zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderConcurrency(0))
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(enc, src); err != nil {
+	if _, err := io.Copy(enc, in); err != nil {
 		enc.Close()
 		return err
 	}
-	return enc.Close()
+	if err := enc.Close(); err != nil {
+		return err
+	}
+	report.send(Progress{Stage: "snapshot", Message: "Snapshot ready", Fraction: 1})
+	return nil
 }
 
 // stripIndex empties the FTS index of the snapshot at path and compacts it.
@@ -157,6 +220,11 @@ type Result struct {
 
 // Run takes one snapshot and uploads it to every target, pruning old ones.
 func Run(ctx context.Context, dbPath string, targets []Target, keep int) (Result, error) {
+	return RunProgress(ctx, dbPath, targets, keep, nil)
+}
+
+// RunProgress is Run that reports its progress.
+func RunProgress(ctx context.Context, dbPath string, targets []Target, keep int, report ProgressFunc) (Result, error) {
 	start := time.Now()
 	res := Result{Name: prefix + start.Format(stamp) + suffix, At: start}
 	if len(targets) == 0 {
@@ -168,7 +236,7 @@ func Run(ctx context.Context, dbPath string, targets []Target, keep int) (Result
 	}
 	defer os.Remove(f.Name())
 	defer f.Close()
-	if err := Snapshot(ctx, dbPath, f); err != nil {
+	if err := snapshot(ctx, dbPath, f, report); err != nil {
 		return res, err
 	}
 	if res.Size, err = f.Seek(0, io.SeekCurrent); err != nil {
@@ -176,12 +244,27 @@ func Run(ctx context.Context, dbPath string, targets []Target, keep int) (Result
 	}
 
 	var errs []error
-	for _, t := range targets {
+	for i, t := range targets {
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
 			return res, err
 		}
-		err := t.Put(ctx, res.Name, f)
+		where := "Uploading to " + targetLabel(t.Name())
+		if len(targets) > 1 {
+			where += fmt.Sprintf(" (%d/%d)", i+1, len(targets))
+		}
+		report.send(Progress{Stage: "upload", Message: where})
+		var m meter
+		body := &countingReader{r: f, size: res.Size, onNew: func(n int64) {
+			report.send(Progress{
+				Stage:    "upload",
+				Message:  fmt.Sprintf("%s · %s of %s", where, humanBytes(n), humanBytes(res.Size)),
+				Fraction: float64(n) / float64(max(res.Size, 1)),
+				Speed:    m.rate(n),
+			})
+		}}
+		err := t.Put(ctx, res.Name, body)
 		if err == nil {
+			report.send(Progress{Stage: "upload", Message: where + " · removing old snapshots", Fraction: 1})
 			err = prune(ctx, t, keep)
 		}
 		if err != nil {
@@ -432,7 +515,10 @@ func (m *Manager) loadLast(ctx context.Context) {
 var ErrRunning = errors.New("backup already running")
 
 // Now runs a backup immediately.
-func (m *Manager) Now(ctx context.Context) (Result, error) {
+func (m *Manager) Now(ctx context.Context) (Result, error) { return m.NowProgress(ctx, nil) }
+
+// NowProgress is Now that reports its progress.
+func (m *Manager) NowProgress(ctx context.Context, report ProgressFunc) (Result, error) {
 	m.mu.Lock()
 	if m.running {
 		m.mu.Unlock()
@@ -442,7 +528,7 @@ func (m *Manager) Now(ctx context.Context) (Result, error) {
 	rev := m.st.Rev()
 	m.mu.Unlock()
 
-	res, err := Run(ctx, m.st.Path, m.targets, m.cfg.Keep)
+	res, err := RunProgress(ctx, m.st.Path, m.targets, m.cfg.Keep, report)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()

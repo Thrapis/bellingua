@@ -757,8 +757,10 @@ func (s *Server) backupNow(w http.ResponseWriter, r *http.Request) error {
 		return badRequest("no backup target configured (backup.dir / backup.sftp / backup.data in bellingua.yaml)")
 	}
 	job := s.jobs.Start("backup", 0, func(ctx context.Context, p Progress) (any, error) {
-		p.Say("snapshotting and uploading")
-		res, err := s.backup.Now(ctx)
+		p.Update("snapshot", "Starting", 0, 1000, 0)
+		res, err := s.backup.NowProgress(ctx, func(bp backup.Progress) {
+			p.Update(bp.Stage, bp.Message, int64(bp.Fraction*1000), 1000, bp.Speed)
+		})
 		return res, err
 	})
 	writeJSON(w, http.StatusAccepted, job)

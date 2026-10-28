@@ -19,6 +19,8 @@ type Job struct {
 	Done     int64     `json:"done"`
 	Total    int64     `json:"total"`
 	Message  string    `json:"message,omitempty"`
+	Stage    string    `json:"stage,omitempty"` // backup: snapshot | upload
+	Speed    int64     `json:"speed,omitempty"` // bytes per second, when the job knows it
 	Error    string    `json:"error,omitempty"`
 	Result   any       `json:"result,omitempty"`
 	Started  time.Time `json:"started"`
@@ -37,6 +39,14 @@ type Progress struct {
 func (p Progress) Set(done, total int64) {
 	p.jm.mu.Lock()
 	p.j.Done, p.j.Total = done, total
+	p.jm.mu.Unlock()
+	p.jm.bump()
+}
+
+// Update sets stage, message, counters and speed in one step.
+func (p Progress) Update(stage, message string, done, total, speed int64) {
+	p.jm.mu.Lock()
+	p.j.Stage, p.j.Message, p.j.Done, p.j.Total, p.j.Speed = stage, message, done, total, speed
 	p.jm.mu.Unlock()
 	p.jm.bump()
 }

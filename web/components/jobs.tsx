@@ -7,6 +7,7 @@ import { LoaderCircle, X } from "lucide-react";
 import { api, type Job } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { cn } from "@/lib/utils";
 
 const JobsContext = createContext<Job[]>([]);
 
@@ -94,6 +95,7 @@ export function RunningJobs({ project }: { project?: number }) {
     <div className="flex flex-col gap-2">
       {jobs.map((j) => {
         const pct = j.total ? Math.round((j.done / j.total) * 100) : 0;
+        if (j.kind === "backup") return <BackupRow key={j.id} job={j} pct={pct} />;
         return (
           <div key={j.id} className="flex items-center gap-3 rounded-md border px-3 py-2 text-sm">
             <LoaderCircle className="size-4 animate-spin text-muted-foreground" />
@@ -108,6 +110,57 @@ export function RunningJobs({ project }: { project?: number }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/** "12.3 MB/s" */
+function rate(bytesPerSecond: number): string {
+  const units = ["B", "KB", "MB", "GB"];
+  let v = bytesPerSecond;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v >= 100 || i === 0 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}/s`;
+}
+
+// Stage colours: the snapshot is blue, the upload green.
+const stageColor: Record<string, string> = {
+  snapshot: "var(--state-translated)",
+  upload: "var(--state-approved)",
+};
+
+/** A backup has two stages, each filling the bar once in its own colour. */
+function BackupRow({ job: j, pct }: { job: Job; pct: number }) {
+  const stage = j.stage ?? "snapshot";
+  return (
+    <div className="flex items-center gap-3 rounded-md border px-3 py-2 text-sm">
+      <LoaderCircle className="size-4 animate-spin text-muted-foreground" />
+      <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+        <div className="flex items-baseline gap-2">
+          <span className="font-medium">Backup</span>
+          <span className="shrink-0 text-xs font-medium" style={{ color: stageColor[stage] }}>
+            {stage === "upload" ? "2/2 uploading" : "1/2 snapshotting"}
+          </span>
+          <span className="min-w-0 truncate text-xs text-muted-foreground" title={j.message}>
+            {j.message}
+          </span>
+        </div>
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+          <div
+            className={cn("h-full rounded-full transition-all", !j.speed && "animate-pulse")}
+            style={{ width: `${pct}%`, background: stageColor[stage] }}
+          />
+        </div>
+      </div>
+      <span className="w-32 shrink-0 whitespace-nowrap text-right tabular-nums text-muted-foreground">
+        {pct}%{j.speed ? ` · ${rate(j.speed)}` : ""}
+      </span>
+      <Button variant="ghost" size="icon" className="size-6" onClick={() => api.cancelJob(j.id)} title="Cancel">
+        <X className="size-3.5" />
+      </Button>
     </div>
   );
 }
