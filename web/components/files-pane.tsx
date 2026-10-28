@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { FolderTree, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { FolderTree, PanelLeftClose, PanelLeftOpen, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { FileTree, type Scope } from "@/components/file-tree";
+import { Input } from "@/components/ui/input";
+import { FileSearchResults, FileTree, type Scope } from "@/components/file-tree";
 
 const STORAGE_KEY = "bellingua:files-open";
 
@@ -28,6 +29,12 @@ export function FilesPane({ project, scope, onScope }: Props) {
   const [open, setOpen] = useState(() => (typeof window === "undefined" ? true : loadOpen()));
 
   const toggle = setOpen;
+  const [search, setSearch] = useState("");
+  const [query, setQuery] = useState(""); // the search, debounced
+  useEffect(() => {
+    const t = setTimeout(() => setQuery(search.trim()), 150);
+    return () => clearTimeout(t);
+  }, [search]);
 
   useEffect(() => {
     try {
@@ -53,21 +60,14 @@ export function FilesPane({ project, scope, onScope }: Props) {
       <aside className="flex w-10 shrink-0 flex-col items-center gap-1 border-r py-2">
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button variant="ghost" size="icon-sm" onClick={() => toggle(true)} aria-label="Show files (Ctrl+B)">
+            <Button variant="ghost" size="icon-sm" onClick={() => toggle(true)} aria-label="Show files (Ctrl+B)" className="relative">
               <PanelLeftOpen />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="right">Show files (Ctrl+B)</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button variant="ghost" size="icon-sm" onClick={() => toggle(true)} aria-label="Files" className="relative">
-              <FolderTree />
               {scoped && <span className="absolute right-1 top-1 size-1.5 rounded-full bg-primary" />}
             </Button>
           </TooltipTrigger>
           <TooltipContent side="right">
-            {scope.file ? "Filtered to one file" : scope.dir ? `Filtered to ${scope.dir}` : "All files"}
+            Show files (Ctrl+B)
+            {scoped && <> · filtered to {scope.file ? "one file" : scope.dir}</>}
           </TooltipContent>
         </Tooltip>
       </aside>
@@ -88,8 +88,33 @@ export function FilesPane({ project, scope, onScope }: Props) {
           <TooltipContent side="right">Hide files (Ctrl+B)</TooltipContent>
         </Tooltip>
       </div>
+      <div className="relative border-b px-2 py-1.5">
+        <Search className="pointer-events-none absolute left-4 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => e.key === "Escape" && setSearch("")}
+          placeholder="Find a file or folder…"
+          aria-label="Find a file or folder"
+          className="h-7 pl-7 pr-7 text-xs"
+        />
+        {search && (
+          <button
+            type="button"
+            aria-label="Clear search"
+            className="absolute right-4 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            onClick={() => setSearch("")}
+          >
+            <X className="size-3.5" />
+          </button>
+        )}
+      </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <FileTree project={project} scope={scope} onScope={onScope} />
+        {query ? (
+          <FileSearchResults project={project} query={query} scope={scope} onScope={onScope} />
+        ) : (
+          <FileTree project={project} scope={scope} onScope={onScope} />
+        )}
       </div>
     </aside>
   );

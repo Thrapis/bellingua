@@ -104,6 +104,7 @@ func (s *Server) Handler() http.Handler {
 	h("GET /api/projects/{pid}/words", s.wordCounts)
 	h("PUT /api/projects/{pid}/settings", s.saveSettings)
 	h("GET /api/projects/{pid}/tree", s.tree)
+	h("GET /api/projects/{pid}/tree/search", s.treeSearch)
 	h("GET /api/projects/{pid}/units", s.listUnits)
 	h("GET /api/projects/{pid}/count", s.countUnits)
 	h("POST /api/projects/{pid}/bulk", s.bulk)

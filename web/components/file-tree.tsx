@@ -108,3 +108,45 @@ function Pct({ counts }: { counts: Counts }) {
     </span>
   );
 }
+
+/** Files and folders whose path contains every word of the query. */
+export function FileSearchResults({ project, query, scope, onScope }: Props & { query: string }) {
+  const found = useQuery({
+    queryKey: ["tree-search", project, query],
+    queryFn: () => api.treeSearch(project, query),
+    placeholderData: (prev) => prev,
+  });
+  if (!found.data) return <p className="px-3 py-2 text-xs text-muted-foreground">Searching…</p>;
+  if (!found.data.nodes.length) return <p className="px-3 py-2 text-xs text-muted-foreground">No files match.</p>;
+  return (
+    <div className="flex flex-col py-1 text-sm">
+      {found.data.nodes.map((n) => {
+        const isFile = !!n.file;
+        const selected = isFile ? scope.file === n.file : !scope.file && scope.dir === n.path;
+        const Icon = isFile ? FileText : Folder;
+        const dir = n.path.slice(0, n.path.length - n.name.length).replace(/\/$/, "");
+        return (
+          <button
+            key={n.path}
+            type="button"
+            title={n.path}
+            onClick={() => onScope(isFile ? { file: n.file } : { dir: n.path })}
+            className={cn("mx-1 flex items-center gap-2 rounded-md px-2 py-1 text-left hover:bg-muted", selected && "bg-muted font-medium")}
+          >
+            <Icon className="size-4 shrink-0 text-muted-foreground" />
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate">{n.name}</span>
+              {dir && <span className="truncate text-[10px] font-normal text-muted-foreground">{dir}</span>}
+            </span>
+            <Pct counts={n.counts} />
+          </button>
+        );
+      })}
+      {found.data.total > found.data.nodes.length && (
+        <p className="px-3 py-1.5 text-xs text-muted-foreground">
+          {(found.data.total - found.data.nodes.length).toLocaleString()} more — refine the search.
+        </p>
+      )}
+    </div>
+  );
+}
