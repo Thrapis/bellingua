@@ -88,14 +88,16 @@ export function JobsProvider({ children }: { children: React.ReactNode }) {
 }
 
 /** Compact list of running jobs with progress and a cancel button. */
-export function RunningJobs({ project }: { project?: number }) {
-  const jobs = useJobs().filter((j) => j.status === "running" && (project === undefined || !j.project || j.project === project));
+export function RunningJobs({ project, hide }: { project?: number; hide?: Job["kind"] }) {
+  const jobs = useJobs().filter(
+    (j) => j.status === "running" && j.kind !== hide && (project === undefined || !j.project || j.project === project),
+  );
   if (!jobs.length) return null;
   return (
     <div className="flex flex-col gap-2">
       {jobs.map((j) => {
         const pct = j.total ? Math.round((j.done / j.total) * 100) : 0;
-        if (j.kind === "backup") return <BackupRow key={j.id} job={j} pct={pct} />;
+        if (j.kind === "backup") return <BackupRow key={j.id} job={j} />;
         return (
           <div key={j.id} className="flex items-center gap-3 rounded-md border px-3 py-2 text-sm">
             <LoaderCircle className="size-4 animate-spin text-muted-foreground" />
@@ -133,7 +135,8 @@ const stageColor: Record<string, string> = {
 };
 
 /** A backup has two stages, each filling the bar once in its own colour. */
-function BackupRow({ job: j, pct }: { job: Job; pct: number }) {
+export function BackupRow({ job: j }: { job: Job }) {
+  const pct = j.total ? Math.round((j.done / j.total) * 100) : 0;
   const stage = j.stage ?? "snapshot";
   return (
     <div className="flex items-center gap-3 rounded-md border px-3 py-2 text-sm">

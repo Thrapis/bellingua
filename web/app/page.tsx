@@ -32,7 +32,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { CountsBar, donePct, Legend } from "@/components/pieces";
-import { RunningJobs } from "@/components/jobs";
+import { BackupRow, RunningJobs, useJobs } from "@/components/jobs";
 import { ExportDialog, ImportDialog, NewProjectDialog, SettingsDialog } from "@/components/project-dialogs";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useConfirm } from "@/components/confirm";
@@ -56,7 +56,8 @@ export default function Home() {
         </Button>
       </header>
 
-      <RunningJobs />
+      <BackupCard />
+      <RunningJobs hide="backup" />
 
       {projects.isPending ? (
         <Skeleton className="h-32 w-full" />
@@ -75,8 +76,6 @@ export default function Home() {
           <Legend />
         </div>
       )}
-
-      <BackupCard />
 
       <NewProjectDialog
         open={creating}
@@ -289,7 +288,10 @@ function BackupCard() {
   const info = useQuery({ queryKey: ["info"], queryFn: api.info, refetchInterval: 60_000 });
   const run = useMutation({ mutationFn: api.backupNow, onError: (e) => toast.error(e.message) });
   const b = info.data?.backup;
+  const job = useJobs().find((j) => j.kind === "backup" && j.status === "running");
   if (!b) return null;
+  // While a backup runs the card is its progress, so it cannot be started twice.
+  if (job) return <BackupRow job={job} />;
   return (
     <div className="flex items-center gap-4 rounded-xl border p-4 text-sm">
       <CloudUpload className="size-5 text-muted-foreground" />
@@ -321,7 +323,7 @@ function BackupCard() {
       </div>
       {b.configured && (
         <Button variant="outline" onClick={() => run.mutate()} disabled={b.running || run.isPending}>
-          Back up now
+          {b.running ? "Backing up…" : "Back up now"}
         </Button>
       )}
     </div>
