@@ -18,10 +18,11 @@ import (
 // fakeDataServer mimics the parts of go-data-server the target uses: bearer
 // auth per app, PUT/GET/DELETE of /api/{app}/{key...} and a JSON listing.
 type fakeDataServer struct {
-	mu    sync.Mutex
-	blobs map[string][]byte
-	token string
-	max   int64
+	mu     sync.Mutex
+	blobs  map[string][]byte
+	token  string
+	max    int64
+	putLen int64 // Content-Length of the last PUT (-1 when chunked)
 }
 
 func (f *fakeDataServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -58,6 +59,7 @@ func (f *fakeDataServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Write(b)
 	case r.Method == http.MethodPut:
+		f.putLen = r.ContentLength
 		if f.max > 0 && r.ContentLength > f.max {
 			http.Error(w, "too large", http.StatusRequestEntityTooLarge)
 			return

@@ -179,6 +179,8 @@ export type Job = {
   done: number;
   total: number;
   message?: string;
+  stage?: "snapshot" | "upload"; // backup
+  speed?: number; // bytes per second, when the job knows it
   error?: string;
   result?: Record<string, unknown>;
   started: string;
@@ -267,6 +269,8 @@ export const api = {
     request<Project>("PUT", `/projects/${id}/settings`, settings),
   tree: (id: number, dir: string) =>
     request<{ dir: string; children: TreeNode[] }>("GET", `/projects/${id}/tree?dir=${encodeURIComponent(dir)}`),
+  treeSearch: (id: number, q: string) =>
+    request<{ nodes: TreeNode[]; total: number }>("GET", `/projects/${id}/tree/search?q=${encodeURIComponent(q)}`),
   units: (id: number, f: Filter, sort: Sort, after: Cursor | null, limit: number, signal?: AbortSignal) => {
     const p = filterParams(f);
     p.set("limit", String(limit));

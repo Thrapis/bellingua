@@ -363,10 +363,13 @@ func (d *DataServer) do(ctx context.Context, method, target string, body io.Read
 
 func (d *DataServer) Put(ctx context.Context, name string, r io.Reader) error {
 	size := int64(-1)
-	if f, ok := r.(*os.File); ok {
-		// Run hands over a temp file; a known length avoids chunked bodies.
-		if st, err := f.Stat(); err == nil {
-			if off, err := f.Seek(0, io.SeekCurrent); err == nil {
+	switch r := r.(type) {
+	case interface{ Len() int64 }: // the progress wrapper around the snapshot file
+		size = r.Len()
+	case *os.File:
+		// A known length avoids chunked bodies.
+		if st, err := r.Stat(); err == nil {
+			if off, err := r.Seek(0, io.SeekCurrent); err == nil {
 				size = st.Size() - off
 			}
 		}
