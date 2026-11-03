@@ -21,7 +21,7 @@ type Filter struct {
 	FileID    int64
 	Dir       string // folder prefix ("a/b" matches a/b and a/b/...)
 	Query     string
-	In        string // source | target | both (default) | key | context
+	In        string // comma-separated fields: source, target, key, context, lang:<code>; "both" = source,target (default)
 	States    []model.State
 	QA        qa.Check // units having any of these bits; qa.Check(^0) = any issue
 	Errors    bool     // units with a QA error
@@ -38,6 +38,11 @@ const (
 	SortUpdated Sort = "updated" // most recently changed first
 	SortShort   Sort = "short"   // shortest source first
 	SortLong    Sort = "long"    // longest source first
+
+	SortTargetShort Sort = "tshort" // shortest translation first (untranslated units have none and are left out)
+	SortTargetLong  Sort = "tlong"  // longest translation first
+	SortStatus      Sort = "status" // untranslated, machine, translated, approved; file order within each
+	SortOldest      Sort = "old"    // least recently changed first
 )
 
 // ParseSort validates a sort name ("" and "file" mean SortFile).
@@ -45,7 +50,7 @@ func ParseSort(s string) (Sort, bool) {
 	switch Sort(s) {
 	case SortFile, "file":
 		return SortFile, true
-	case SortUpdated, SortShort, SortLong:
+	case SortUpdated, SortShort, SortLong, SortTargetShort, SortTargetLong, SortStatus, SortOldest:
 		return Sort(s), true
 	}
 	return "", false
@@ -61,6 +66,14 @@ func (s Sort) order() (a, b, orderBy string, desc bool) {
 		return "length(u.source)", "u.id", "length(u.source), u.id", false
 	case SortLong:
 		return "length(u.source)", "u.id", "length(u.source) DESC, u.id DESC", true
+	case SortTargetShort:
+		return "length(u.target)", "u.id", "length(u.target), u.id", false
+	case SortTargetLong:
+		return "length(u.target)", "u.id", "length(u.target) DESC, u.id DESC", true
+	case SortOldest:
+		return "u.updated_at", "u.id", "u.updated_at, u.id", false
+	case SortStatus:
+		return "u.state", "u.file_id", "u.project_id, u.state, u.file_id, u.ord", false
 	}
 	return "u.file_id", "u.ord", "u.project_id, u.file_id, u.ord", false
 }
@@ -72,12 +85,25 @@ type Cursor struct {
 	B int64 `json:"b"`
 }
 
+// where is the condition an order needs; spelled to match units_tlen.
+func (s Sort) where() string {
+	switch s {
+	case SortTargetShort, SortTargetLong:
+		return " AND u.target IS NOT NULL"
+	}
+	return ""
+}
+
 func (s Sort) cursorOf(r Row) Cursor {
 	switch s {
-	case SortUpdated:
+	case SortUpdated, SortOldest:
 		return Cursor{r.UpdatedAt, r.ID}
 	case SortShort, SortLong:
 		return Cursor{int64(r.SourceLen), r.ID}
+	case SortTargetShort, SortTargetLong:
+		return Cursor{int64(r.TargetLen), r.ID}
+	case SortStatus:
+		return Cursor{int64(r.State), r.FileID<<32 | r.Ord}
 	}
 	return Cursor{r.FileID, r.Ord}
 }
@@ -128,37 +154,80 @@ func (f Filter) where() (string, []any) {
 		b.WriteString(" AND u.changed = 1")
 	}
 	if q := f.Query; q != "" {
-		switch f.In {
-		case "key":
-			b.WriteString(" AND instr(u.key, ?) > 0")
-			args = append(args, q)
-		case "context":
-			b.WriteString(" AND instr(u.context, ?) > 0")
-			args = append(args, q)
-		default:
+		var ors []string
+		in := parseIn(f.In)
+		if in.source || in.target {
 			cols := []string{"source", "target"}
-			switch f.In {
-			case "source":
+			switch {
+			case !in.target:
 				cols = cols[:1]
-			case "target":
+			case !in.source:
 				cols = cols[1:]
 			}
 			if utf8.RuneCountInString(q) >= 3 {
 				// Trigram FTS: case-insensitive (Unicode-aware) substring match.
-				b.WriteString(" AND u.id IN (SELECT rowid FROM units_fts WHERE units_fts MATCH ?)")
+				ors = append(ors, "u.id IN (SELECT rowid FROM units_fts WHERE units_fts MATCH ?)")
 				args = append(args, "{"+strings.Join(cols, " ")+"} : "+ftsPhrase(q))
 			} else {
 				// Too short for trigrams: plain, case-sensitive scan.
-				var ors []string
 				for _, c := range cols {
 					ors = append(ors, "instr(u."+c+", ?) > 0")
 					args = append(args, q)
 				}
-				b.WriteString(" AND (" + strings.Join(ors, " OR ") + ")")
 			}
 		}
+		if in.key {
+			ors = append(ors, "instr(u.key, ?) > 0")
+			args = append(args, q)
+		}
+		if in.context {
+			ors = append(ors, "instr(u.context, ?) > 0")
+			args = append(args, q)
+		}
+		for _, lang := range in.langs {
+			if utf8.RuneCountInString(q) >= 3 {
+				ors = append(ors, "u.id IN (SELECT unit_id FROM unit_langs_fts WHERE unit_langs_fts MATCH ? AND lang = ?)")
+				args = append(args, ftsPhrase(q), lang)
+			} else {
+				ors = append(ors, "u.id IN (SELECT unit_id FROM unit_langs WHERE lang = ? AND instr(target, ?) > 0)")
+				args = append(args, lang, q)
+			}
+		}
+		b.WriteString(" AND (" + strings.Join(ors, " OR ") + ")")
 	}
 	return b.String(), args
+}
+
+// searchIn is the set of fields a query is looked for in.
+type searchIn struct {
+	source, target, key, context bool
+	langs                        []string // reference languages
+}
+
+// parseIn reads Filter.In. Unknown names are ignored; no known name (or "")
+// means source and translation.
+func parseIn(in string) searchIn {
+	var r searchIn
+	for _, f := range strings.Split(in, ",") {
+		switch f = strings.TrimSpace(f); {
+		case f == "source":
+			r.source = true
+		case f == "target":
+			r.target = true
+		case f == "both":
+			r.source, r.target = true, true
+		case f == "key":
+			r.key = true
+		case f == "context":
+			r.context = true
+		case strings.HasPrefix(f, "lang:") && len(f) > len("lang:"):
+			r.langs = append(r.langs, f[len("lang:"):])
+		}
+	}
+	if !r.source && !r.target && !r.key && !r.context && len(r.langs) == 0 {
+		r.source, r.target = true, true
+	}
+	return r
 }
 
 func stateSet(ss []model.State) int {
@@ -199,13 +268,17 @@ const PreviewRunes = 400
 // cursor (nil = from the start). next is nil on the last page.
 func (s *Store) List(ctx context.Context, f Filter, sort Sort, after *Cursor, limit int) (out []Row, next *Cursor, err error) {
 	where, args := f.where()
+	where += sort.where()
 	a, b, orderBy, desc := sort.order()
 	if after != nil {
 		op := ">"
 		if desc {
 			op = "<"
 		}
-		if sort == SortFile {
+		if sort == SortStatus {
+			where += " AND (u.state, u.file_id, u.ord) > (?, ?, ?)"
+			args = append(args, after.A, after.B>>32, after.B&0xffffffff)
+		} else if sort == SortFile {
 			where += " AND (" + a + ", " + b + ") " + op + " (?, ?)"
 			args = append(args, after.A, after.B)
 		} else {

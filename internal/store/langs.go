@@ -133,6 +133,11 @@ func (s *Store) DeleteProjectLang(ctx context.Context, projectID int64, lang str
 
 // deleteLangTexts removes a language's texts for all units of a project.
 func deleteLangTexts(ctx context.Context, tx *sql.Tx, projectID int64, lang string) error {
+	// The FTS rows go first: they are found through the units, which stay.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM unit_langs_fts WHERE lang = ? AND unit_id IN
+		(SELECT id FROM units WHERE project_id = ?)`, lang, projectID); err != nil {
+		return err
+	}
 	_, err := tx.ExecContext(ctx, `DELETE FROM unit_langs WHERE lang = ? AND unit_id IN
 		(SELECT id FROM units WHERE project_id = ?)`, lang, projectID)
 	return err
@@ -220,8 +225,14 @@ func (w *LangWriter) Put(unitID int64, tgt []model.Piece, state model.State, sou
 	return err
 }
 
-// Finish records the import on the language.
+// Finish indexes the stored texts for search and records the import on the
+// language.
 func (w *LangWriter) Finish(now int64) error {
+	if _, err := w.tx.ExecContext(w.ctx, `INSERT INTO unit_langs_fts (target, unit_id, lang)
+		SELECT target, unit_id, lang FROM unit_langs WHERE lang = ? AND unit_id IN
+		(SELECT id FROM units WHERE project_id = ?)`, w.lang, w.projectID); err != nil {
+		return err
+	}
 	_, err := w.tx.ExecContext(w.ctx, "UPDATE project_langs SET units = ?, imported_at = ? WHERE project_id = ? AND lang = ?",
 		w.stored, now, w.projectID, w.lang)
 	return err

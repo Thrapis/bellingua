@@ -102,7 +102,7 @@ type filterIn struct {
 	Dir     string   `json:"dir,omitempty" jsonschema:"only units under this folder"`
 	File    int64    `json:"file,omitempty" jsonschema:"only units of this file id (from get_tree)"`
 	Query   string   `json:"query,omitempty" jsonschema:"text search; 3+ characters search case-insensitively"`
-	In      string   `json:"in,omitempty" jsonschema:"where to search: source, target, both (default), key or context"`
+	In      string   `json:"in,omitempty" jsonschema:"where to search, one or several comma-separated (any may match): source, target, key, context, lang:<code> (a reference language, e.g. lang:en); both = source,target (default)"`
 	States  []string `json:"states,omitempty" jsonschema:"only these states: untranslated, mt, translated, approved"`
 	QA      []string `json:"qa,omitempty" jsonschema:"only units failing one of these QA checks (ids: placeholders, empty, whitespace, punctuation, numbers, double-space, brackets, untranslated, forbidden, length, glossary), or [\"any\"]"`
 	Errors  bool     `json:"errors,omitempty" jsonschema:"only units with QA errors"`
@@ -118,7 +118,7 @@ func (in filterIn) filter() (store.Filter, error) {
 
 type listIn struct {
 	filterIn
-	Sort   string `json:"sort,omitempty" jsonschema:"file (default), updated, short or long"`
+	Sort   string `json:"sort,omitempty" jsonschema:"file (default), updated, old (least recently changed), short or long (source length), tshort or tlong (translation length; untranslated units are left out), status (untranslated, mt, translated, approved)"`
 	Cursor string `json:"cursor,omitempty" jsonschema:"the next value of the previous page"`
 	Limit  int    `json:"limit,omitempty" jsonschema:"page size, 1-200 (default 50)"`
 	// Langs adds the project's extra-language texts (see get_unit_langs) to each row.
