@@ -99,6 +99,18 @@ The global rules (`~/.claude/CLAUDE.md`) apply. This project adds:
 - **Search**: queries of 3+ characters use FTS trigram (Unicode
   case-insensitive, so Cyrillic works). Shorter ones use a case-sensitive
   `instr` scan. Key and context search always use `instr`.
+- **Search fields**: `Filter.In` is a comma list (`source,target,key,context,
+  lang:<code>`; `both` = `source,target`, the default); a unit matches when
+  any field does (`Filter.where` ORs the clauses). `lang:<code>` searches a
+  reference language through `unit_langs_fts` (migration 9, a plain trigram
+  FTS5 table because `unit_langs` has no rowid; no triggers: `LangWriter.Finish`,
+  `DeleteProjectLang` and `DeleteProject` maintain it, and the backup strips
+  and rebuilds it like `units_fts`). Under 3 characters it falls back to `instr`.
+- **Orders** (`store.Sort`): besides file order, `updated`/`old`
+  (`units_updated`), `short`/`long` (`units_len`), `tshort`/`tlong`
+  (`units_tlen`, partial on `target IS NOT NULL`, so untranslated units are left
+  out) and `status` (`units_status`: state, then file order; its cursor packs
+  `file_id<<32|ord`). `TestListOrdersUseIndexes` checks each plan.
 - **List rows** carry previews cut to `PreviewRunes`; full texts come from
   `GET /api/units/{id}`.
 

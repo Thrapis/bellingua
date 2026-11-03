@@ -190,6 +190,7 @@ func (s *Store) DeleteProject(ctx context.Context, id int64) error {
 		}
 		for _, q := range []string{
 			"DELETE FROM history WHERE project_id = ?",
+			"DELETE FROM unit_langs_fts WHERE unit_id IN (SELECT id FROM units WHERE project_id = ?)",
 			"DELETE FROM unit_langs WHERE unit_id IN (SELECT id FROM units WHERE project_id = ?)",
 			"DELETE FROM project_langs WHERE project_id = ?",
 			"DELETE FROM units WHERE project_id = ?",

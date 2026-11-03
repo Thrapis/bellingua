@@ -1,7 +1,8 @@
 "use client";
 
-import { ArrowUpDown, ListFilter, X } from "lucide-react";
-import { STATES, SORTS, type Filter, type QACheck, type Sort, type State } from "@/lib/api";
+import { ArrowUpDown, Languages, ListFilter, X } from "lucide-react";
+import { STATES, SORTS, type Filter, type ProjectLang, type QACheck, type Sort, type State } from "@/lib/api";
+import { langName } from "@/lib/lang";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -15,19 +16,35 @@ import {
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { StateDot, stateLabel } from "@/components/pieces";
 
 /** URL patch: undefined removes a parameter. */
 export type FilterPatch = Partial<Record<"in" | "state" | "qa" | "changed" | "same", string | undefined>>;
 
-const IN_LABELS: Record<NonNullable<Filter["in"]>, string> = {
-  both: "Source + translation",
-  source: "Source",
-  target: "Translation",
-  key: "Key",
-  context: "Context",
-};
+const FIELDS = [
+  { id: "source", label: "Source" },
+  { id: "target", label: "Translation" },
+  { id: "key", label: "Key" },
+  { id: "context", label: "Context" },
+];
+const FIELD_ORDER = FIELDS.map((f) => f.id);
+
+/** The fields a filter searches in; no value means source and translation. */
+function parseIn(v: string | undefined): string[] {
+  const out = (v ?? "").split(",").flatMap((f) => (f === "both" ? ["source", "target"] : f ? [f] : []));
+  return out.length ? out : ["source", "target"];
+}
+
+/** Back to the URL form: fixed order, and the default is no value at all. */
+function joinIn(fields: string[], langs: string[]): string | undefined {
+  const rank = (f: string) => (f.startsWith("lang:") ? FIELD_ORDER.length + langs.indexOf(f.slice(5)) : FIELD_ORDER.indexOf(f));
+  const sorted = [...new Set(fields)].sort((x, y) => rank(x) - rank(y));
+  return sorted.join(",") === "source,target" ? undefined : sorted.join(",");
+}
+
+function fieldLabel(f: string): string {
+  return f.startsWith("lang:") ? langName(f.slice(5)) : (FIELDS.find((x) => x.id === f)?.label ?? f);
+}
 
 function qaLabel(qa: string, checks: QACheck[]) {
   if (qa === "any") return "Any QA issue";
@@ -35,14 +52,16 @@ function qaLabel(qa: string, checks: QACheck[]) {
   return checks.find((c) => c.id === qa)?.title ?? qa;
 }
 
-type Props = { filter: Filter; qaChecks: QACheck[]; onChange: (p: FilterPatch) => void };
+type Props = { filter: Filter; qaChecks: QACheck[]; langs: ProjectLang[]; onChange: (p: FilterPatch) => void };
 
 /** The filters behind one button, plus removable chips for what is active. */
-export function FilterMenu({ filter, qaChecks, onChange }: Props) {
+export function FilterMenu({ filter, qaChecks, langs, onChange }: Props) {
   const states = filter.states ?? [];
-  const inField = filter.in ?? "both";
+  const inFields = parseIn(filter.in);
+  const langCodes = langs.map((l) => l.lang);
+  const setIn = (fields: string[]) => fields.length && onChange({ in: joinIn(fields, langCodes) });
   const active =
-    (inField !== "both" ? 1 : 0) + (states.length ? 1 : 0) + (filter.qa ? 1 : 0) + (filter.changed ? 1 : 0) + (filter.same ? 1 : 0);
+    (filter.in ? 1 : 0) + (states.length ? 1 : 0) + (filter.qa ? 1 : 0) + (filter.changed ? 1 : 0) + (filter.same ? 1 : 0);
   const setStates = (s: State[]) => onChange({ state: s.length ? s.join(",") : undefined });
 
   return (
@@ -58,21 +77,37 @@ export function FilterMenu({ filter, qaChecks, onChange }: Props) {
         </PopoverTrigger>
         <PopoverContent align="start" className="grid w-80 gap-4">
           <div className="grid gap-1.5">
-            <Label className="text-xs text-muted-foreground">Search in</Label>
-            <ToggleGroup
-              type="single"
-              size="sm"
-              variant="outline"
-              className="flex-wrap justify-start"
-              value={inField}
-              onValueChange={(v) => v && onChange({ in: v === "both" ? undefined : v })}
-            >
-              {(Object.keys(IN_LABELS) as NonNullable<Filter["in"]>[]).map((k) => (
-                <ToggleGroupItem key={k} value={k} className="px-2 text-xs">
-                  {k === "both" ? "Both" : IN_LABELS[k]}
-                </ToggleGroupItem>
+            <Label className="text-xs text-muted-foreground">Search in (any of the ticked)</Label>
+            <div className="grid grid-cols-2 gap-1.5">
+              {FIELDS.map((f) => (
+                <label key={f.id} className="flex items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={inFields.includes(f.id)}
+                    onCheckedChange={(v) => setIn(v ? [...inFields, f.id] : inFields.filter((x) => x !== f.id))}
+                  />
+                  {f.label}
+                </label>
               ))}
-            </ToggleGroup>
+            </div>
+            {langCodes.length > 0 && (
+              <div className="grid gap-1.5">
+                <div className="grid grid-cols-2 gap-1.5">
+                  {langCodes.map((l) => {
+                    const id = `lang:${l}`;
+                    return (
+                      <label key={id} className="flex items-center gap-2 text-sm">
+                        <Checkbox
+                          checked={inFields.includes(id)}
+                          onCheckedChange={(v) => setIn(v ? [...inFields, id] : inFields.filter((x) => x !== id))}
+                        />
+                        <span className="rounded bg-muted px-1 font-mono text-[10px] uppercase text-muted-foreground">{l}</span>
+                        <span className="truncate">{langName(l)}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="grid gap-1.5">
@@ -128,7 +163,17 @@ export function FilterMenu({ filter, qaChecks, onChange }: Props) {
         </PopoverContent>
       </Popover>
 
-      {inField !== "both" && <Chip label={`In: ${IN_LABELS[inField]}`} onRemove={() => onChange({ in: undefined })} />}
+      {filter.in && (
+        <Chip
+          label={
+            <span className="inline-flex items-center gap-1">
+              In: {inFields.map(fieldLabel).join(", ")}
+              {inFields.some((f) => f.startsWith("lang:")) && <Languages className="size-3 text-muted-foreground" />}
+            </span>
+          }
+          onRemove={() => onChange({ in: undefined })}
+        />
+      )}
       {states.length > 0 && (
         <Chip
           label={
@@ -151,7 +196,7 @@ export function FilterMenu({ filter, qaChecks, onChange }: Props) {
 
 function Chip({ label, onRemove }: { label: React.ReactNode; onRemove: () => void }) {
   return (
-    <span className="inline-flex h-7 items-center gap-1 rounded-full border pl-2.5 pr-1 text-xs">
+    <span className="inline-flex h-7 items-center gap-1 whitespace-nowrap rounded-full border pl-2.5 pr-1 text-xs">
       {label}
       <button type="button" onClick={onRemove} className="grid size-5 place-items-center rounded-full hover:bg-muted" aria-label="Remove filter">
         <X className="size-3" />

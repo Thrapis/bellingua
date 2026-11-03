@@ -52,12 +52,16 @@ export type Row = {
 export type Cursor = { a: number; b: number };
 
 /** List orders; every one is index-backed on the server. */
-export type Sort = "file" | "updated" | "short" | "long";
+export type Sort = "file" | "updated" | "old" | "short" | "long" | "tshort" | "tlong" | "status";
 export const SORTS: { id: Sort; label: string }[] = [
   { id: "file", label: "File order" },
   { id: "updated", label: "Recently changed" },
+  { id: "old", label: "Least recently changed" },
   { id: "short", label: "Shortest source first" },
   { id: "long", label: "Longest source first" },
+  { id: "tshort", label: "Shortest translation first" },
+  { id: "tlong", label: "Longest translation first" },
+  { id: "status", label: "Needs work first" },
 ];
 export type UnitsPage = { rows: Row[]; next: Cursor | null };
 
@@ -210,7 +214,8 @@ export type Filter = {
   file?: number;
   dir?: string;
   q?: string;
-  in?: "both" | "source" | "target" | "key" | "context";
+  /** Fields to search, comma separated: source, target, key, context, lang:<code>. Default: source and target. */
+  in?: string;
   states?: State[];
   qa?: string; // check ids, comma separated, or "any"
   errors?: boolean;
@@ -248,7 +253,7 @@ export function filterParams(f: Filter): URLSearchParams {
   if (f.file) p.set("file", String(f.file));
   else if (f.dir) p.set("dir", f.dir);
   if (f.q) p.set("q", f.q);
-  if (f.q && f.in && f.in !== "both") p.set("in", f.in);
+  if (f.q && f.in) p.set("in", f.in);
   if (f.states?.length) p.set("state", f.states.join(","));
   if (f.qa) p.set("qa", f.qa);
   if (f.errors) p.set("errors", "1");

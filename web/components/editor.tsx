@@ -84,7 +84,7 @@ export function Editor() {
       file: Number(sp.get("file")) || undefined,
       dir: sp.get("dir") ?? undefined,
       q: sp.get("q") ?? undefined,
-      in: (sp.get("in") as Filter["in"]) ?? undefined,
+      in: sp.get("in") ?? undefined,
       states: (sp.get("state")?.split(",").filter(Boolean) as State[]) ?? undefined,
       qa: sp.get("qa") ?? undefined,
       changed: sp.get("changed") === "1",
@@ -395,6 +395,7 @@ export function Editor() {
         <FilterMenu
           filter={filter}
           qaChecks={info.data?.qaChecks ?? []}
+          langs={langs.data ?? []}
           onChange={setFilters}
         />
         <SortMenu sort={sort} onChange={(v) => setFilters({ sort: v === "file" ? undefined : v })} />

@@ -175,6 +175,8 @@ func stripIndex(ctx context.Context, path string) error {
 	db.SetMaxOpenConns(1)
 	for _, q := range []string{
 		"INSERT INTO units_fts(units_fts) VALUES ('delete-all')",
+		// A plain FTS5 table keeps its segments after DELETE, so it is dropped.
+		"DROP TABLE IF EXISTS unit_langs_fts",
 		"INSERT OR REPLACE INTO meta (key, value) VALUES ('fts_stripped', '1')",
 		"VACUUM",
 	} {
@@ -198,10 +200,17 @@ func rebuildIndex(ctx context.Context, path string) error {
 	if stripped != "1" {
 		return nil
 	}
-	for _, q := range []string{
-		"INSERT INTO units_fts(units_fts) VALUES ('rebuild')",
-		"DELETE FROM meta WHERE key = 'fts_stripped'",
-	} {
+	qs := []string{"INSERT INTO units_fts(units_fts) VALUES ('rebuild')"}
+	// The reference index was dropped from the snapshot. A snapshot from before
+	// migration 9 has no such table; opening the database builds it.
+	var version int
+	_ = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
+	if version >= 9 {
+		qs = append(qs, store.RefIndexDDL,
+			"DELETE FROM unit_langs_fts",
+			"INSERT INTO unit_langs_fts (target, unit_id, lang) SELECT target, unit_id, lang FROM unit_langs")
+	}
+	for _, q := range append(qs, "DELETE FROM meta WHERE key = 'fts_stripped'") {
 		if _, err := db.ExecContext(ctx, q); err != nil {
 			return err
 		}

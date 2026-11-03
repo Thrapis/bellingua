@@ -49,6 +49,14 @@ var schemaV7 string
 //go:embed schema_v8.sql
 var schemaV8 string
 
+//go:embed schema_v9.sql
+var schemaV9 string
+
+// RefIndexDDL creates the reference-language search index (migration 9) when
+// it is missing; the backup drops it from snapshots and restore recreates it.
+const RefIndexDDL = `CREATE VIRTUAL TABLE IF NOT EXISTS unit_langs_fts USING fts5(
+	target, unit_id UNINDEXED, lang UNINDEXED, tokenize = 'trigram')`
+
 // migration is SQL plus an optional Go step run in the same transaction.
 type migration struct {
 	sql  string
@@ -66,6 +74,7 @@ var migrations = []migration{
 	{sql: schemaV6},
 	{sql: schemaV7},
 	{sql: schemaV8, post: backfillWords},
+	{sql: schemaV9},
 }
 
 // backfillSourceHash fills units.source_hash for existing rows.
