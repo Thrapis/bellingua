@@ -5,6 +5,7 @@ import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { LoaderCircle, X } from "lucide-react";
 import { api, type Job } from "@/lib/api";
+import { followJobs } from "@/lib/jobs-stream";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
@@ -52,36 +53,21 @@ export function JobsProvider({ children }: { children: React.ReactNode }) {
   const seen = useRef(new Map<string, Job["status"]>());
 
   useEffect(() => {
-    let es: EventSource | null = null;
-    let retry: ReturnType<typeof setTimeout> | undefined;
-    const connect = () => {
-      es = new EventSource("/api/jobs/events");
-      es.onmessage = (ev) => {
-        const list: Job[] = JSON.parse(ev.data);
-        setJobs(list);
-        for (const j of list) {
-          const prev = seen.current.get(j.id);
-          seen.current.set(j.id, j.status);
-          if (prev === "running" && j.status !== "running") {
-            if (j.status === "done") toast.success(`${kindLabel[j.kind]} finished`, { description: summary(j) });
-            else toast.error(`${kindLabel[j.kind]} ${j.status}`, { description: j.error });
-            if (j.kind !== "export" && j.kind !== "backup") {
-              qc.invalidateQueries({ predicate: (q) => q.queryKey[0] !== "info" });
-            }
-            if (j.kind === "backup") qc.invalidateQueries({ queryKey: ["info"] });
+    return followJobs((list) => {
+      setJobs(list);
+      for (const j of list) {
+        const prev = seen.current.get(j.id);
+        seen.current.set(j.id, j.status);
+        if (prev === "running" && j.status !== "running") {
+          if (j.status === "done") toast.success(`${kindLabel[j.kind]} finished`, { description: summary(j) });
+          else toast.error(`${kindLabel[j.kind]} ${j.status}`, { description: j.error });
+          if (j.kind !== "export" && j.kind !== "backup") {
+            qc.invalidateQueries({ predicate: (q) => q.queryKey[0] !== "info" });
           }
+          if (j.kind === "backup") qc.invalidateQueries({ queryKey: ["info"] });
         }
-      };
-      es.onerror = () => {
-        es?.close();
-        retry = setTimeout(connect, 2000);
-      };
-    };
-    connect();
-    return () => {
-      es?.close();
-      clearTimeout(retry);
-    };
+      }
+    });
   }, [qc]);
 
   return <JobsContext.Provider value={jobs}>{children}</JobsContext.Provider>;
