@@ -106,6 +106,20 @@ The global rules (`~/.claude/CLAUDE.md`) apply. This project adds:
   FTS5 table because `unit_langs` has no rowid; no triggers: `LangWriter.Finish`,
   `DeleteProjectLang` and `DeleteProject` maintain it, and the backup strips
   and rebuilds it like `units_fts`). Under 3 characters it falls back to `instr`.
+- **Regex and NOT** (`Filter.Regex`, `NotQuery`, `NotIn`; MCP `regex`/`notQuery`/`notIn`,
+  HTTP `regex=1`/`nq`/`nin`): with `Regex` both queries are patterns of
+  `internal/rx`, Go RE2 whose ``, `\B`, `\w`, `\W` follow Unicode (Go's are ASCII-only) and
+  count an apostrophe between letters as part of the word. RE2 has no look-around, so each ``
+  becomes an empty group whose position is checked after the match (`rx.go` explains the limit).
+  Matching runs in SQL through the `rx(pattern, text)` function (`store/rxfunc.go`, compiled
+  patterns cached). A pattern with a literal of 3+ characters that every match contains
+  (`Regexp.Literal`) is first narrowed through `units_fts`; one without scans every unit the
+  rest of the filter leaves (about 200 ms for a rare pattern on 180k units, the benchmarks
+  `BenchmarkRegex*`). `NotQuery` is `AND NOT coalesce(<same condition>, 0)` through the same
+  `match` builder, so a unit with no translation "does not contain" anything. A broken pattern is
+  `Filter.Validate`'s error (400). `Count` skips the `files` counters when `NotQuery` is set.
+  `replace_in_targets` with `regex` uses the same package: `find` is a pattern, `replace` a
+  template (`$1`, `${name}`); empty matches are ignored.
 - **Orders** (`store.Sort`): besides file order, `updated`/`old`
   (`units_updated`), `short`/`long` (`units_len`), `tshort`/`tlong`
   (`units_tlen`, partial on `target IS NOT NULL`, so untranslated units are left

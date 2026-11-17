@@ -221,6 +221,12 @@ export type Filter = {
   q?: string;
   /** Fields to search, comma separated: source, target, key, context, lang:<code>. Default: source and target. */
   in?: string;
+  /** q and nq are RE2 patterns (Unicode-aware  and \w), not substrings. */
+  regex?: boolean;
+  /** Leave out strings that contain this (same matching as q), looked for in nin. */
+  nq?: string;
+  /** Fields nq is looked for in, like `in`. Default: source and translation. */
+  nin?: string;
   states?: State[];
   qa?: string; // check ids, comma separated, or "any"
   errors?: boolean;
@@ -259,6 +265,11 @@ export function filterParams(f: Filter): URLSearchParams {
   else if (f.dir) p.set("dir", f.dir);
   if (f.q) p.set("q", f.q);
   if (f.q && f.in) p.set("in", f.in);
+  if (f.regex && (f.q || f.nq)) p.set("regex", "1");
+  if (f.nq) {
+    p.set("nq", f.nq);
+    if (f.nin) p.set("nin", f.nin);
+  }
   if (f.states?.length) p.set("state", f.states.join(","));
   if (f.qa) p.set("qa", f.qa);
   if (f.errors) p.set("errors", "1");

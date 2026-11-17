@@ -31,7 +31,9 @@ Workflow for translating: find units with list_units (states ["untranslated","mt
 
 For many units at once: list_units with langs (e.g. ["uk","en"]) puts those extra-language texts on every row as refs, so no get_unit_langs call per line; save_translations saves up to 200 units per call, and an item without target keeps the current text and just marks it translated (a reviewed good machine translation). Each item succeeds or fails on its own.
 
-Terminology sweeps: when a term is decided and the old form (with its inflections) sits in many units, do not retype them; use replace_in_targets with pairs per form. It is a dry run unless you pass dryRun=false: run the dry run first, check the samples and failures (a replacement that breaks the codes is refused for that unit), then run it for real. Approved units are never touched, states stay as they are.
+Searching: query and notQuery are substrings by default (3+ characters match case-insensitively, shorter ones case-sensitively). With regex=true they are RE2 patterns whose \b and \w work on Cyrillic and treat an apostrophe between letters as part of the word: query "ў\b" in "target" finds ў at a word end; query "Анна" in "source" with notQuery "Ганна" notIn "target" finds units whose translation lacks the agreed form. A pattern with 3+ literal characters in a row is much faster than one without.
+
+Terminology sweeps: when a term is decided and the old form (with its inflections) sits in many units, do not retype them; use replace_in_targets with pairs per form (with regex=true each find is a pattern and each replace a template with $1 groups). It is a dry run unless you pass dryRun=false: run the dry run first, check the samples and failures (a replacement that breaks the codes is refused for that unit), then run it for real. Approved units are never touched, states stay as they are.
 
 save_translation, save_translations and replace_in_targets mark your edits with origin "ai". You can overwrite anything below approved (the previous text stays in the unit's history), but it never changes an approved unit. Glossary edits trigger a project QA recheck after 2 s.`
 
@@ -98,21 +100,28 @@ type treeIn struct {
 }
 
 type filterIn struct {
-	Project int64    `json:"project" jsonschema:"project id"`
-	Dir     string   `json:"dir,omitempty" jsonschema:"only units under this folder"`
-	File    int64    `json:"file,omitempty" jsonschema:"only units of this file id (from get_tree)"`
-	Query   string   `json:"query,omitempty" jsonschema:"text search; 3+ characters search case-insensitively"`
-	In      string   `json:"in,omitempty" jsonschema:"where to search, one or several comma-separated (any may match): source, target, key, context, lang:<code> (a reference language, e.g. lang:en); both = source,target (default)"`
-	States  []string `json:"states,omitempty" jsonschema:"only these states: untranslated, mt, translated, approved"`
-	QA      []string `json:"qa,omitempty" jsonschema:"only units failing one of these QA checks (ids: placeholders, empty, whitespace, punctuation, numbers, double-space, brackets, untranslated, forbidden, length, glossary), or [\"any\"]"`
-	Errors  bool     `json:"errors,omitempty" jsonschema:"only units with QA errors"`
-	Changed bool     `json:"changed,omitempty" jsonschema:"only units whose source changed on the last import"`
-	Same    int64    `json:"same,omitempty" jsonschema:"only units with the same source as this unit id"`
+	Project  int64    `json:"project" jsonschema:"project id"`
+	Dir      string   `json:"dir,omitempty" jsonschema:"only units under this folder"`
+	File     int64    `json:"file,omitempty" jsonschema:"only units of this file id (from get_tree)"`
+	Query    string   `json:"query,omitempty" jsonschema:"text search; 3+ characters search case-insensitively, shorter ones case-sensitively. With regex=true it is a pattern"`
+	In       string   `json:"in,omitempty" jsonschema:"where to search, one or several comma-separated (any may match): source, target, key, context, lang:<code> (a reference language, e.g. lang:en); both = source,target (default)"`
+	Regex    bool     `json:"regex,omitempty" jsonschema:"query and notQuery are RE2 regular expressions, not substrings: case-sensitive unless they start with (?i); \\b, \\B, \\w and \\W follow Unicode (they work on Cyrillic) and an apostrophe between letters is part of the word; no look-around or backreferences. E.g. \\p{L}ў\\b, (?i)\\bджотаро\\p{L}*. A pattern with 3+ literal characters in a row is much faster"`
+	NotQuery string   `json:"notQuery,omitempty" jsonschema:"drop units that contain this text (same matching rules as query), looked for in notIn. With query: source has X but the translation lacks Y = query X in source, notQuery Y notIn target. A unit without a translation never contains it"`
+	NotIn    string   `json:"notIn,omitempty" jsonschema:"where notQuery is looked for, like in (default source,target: neither may contain it)"`
+	States   []string `json:"states,omitempty" jsonschema:"only these states: untranslated, mt, translated, approved"`
+	QA       []string `json:"qa,omitempty" jsonschema:"only units failing one of these QA checks (ids: placeholders, empty, whitespace, punctuation, numbers, double-space, brackets, untranslated, forbidden, length, glossary), or [\"any\"]"`
+	Errors   bool     `json:"errors,omitempty" jsonschema:"only units with QA errors"`
+	Changed  bool     `json:"changed,omitempty" jsonschema:"only units whose source changed on the last import"`
+	Same     int64    `json:"same,omitempty" jsonschema:"only units with the same source as this unit id"`
 }
 
 func (in filterIn) filter() (store.Filter, error) {
 	f := store.Filter{ProjectID: in.Project, Dir: strings.Trim(in.Dir, "/"), FileID: in.File, Query: in.Query, In: in.In,
+		Regex: in.Regex, NotQuery: in.NotQuery, NotIn: in.NotIn,
 		Errors: in.Errors, Changed: in.Changed, SameAs: in.Same}
+	if err := f.Validate(); err != nil {
+		return f, badRequest("%v", err)
+	}
 	return f, filterLists(&f, in.States, in.QA)
 }
 

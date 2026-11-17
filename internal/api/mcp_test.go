@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -952,5 +953,106 @@ func TestMCPReplaceFilter(t *testing.T) {
 		"pairs": []any{pair("Рыпер", "X"), pair("Сеткавы", "Y")}})
 	if isErr || out.Changed == 0 {
 		t.Errorf("file-narrowed sweep = %+v %s", out, text)
+	}
+}
+
+func regexUnits() []sweepUnit {
+	return []sweepUnit{
+		{"k1", "Анна пришла", "Ганна прыйшла"},
+		{"k2", "Анна ушла", "Ана пайшла"},
+		{"k3", "Он шёл в лес", "Ён ішоў ў лес"},
+		{"k4", "Пауза у двери", "Паўза ў дзвярах"},
+		{"k5", "ДЖОТАРО и Джотаро", "ДЖОТАРА і Джотара"},
+		{"k6", "Нет", ""},
+	}
+}
+
+func listKeys(t *testing.T, cs *mcp.ClientSession, p *store.Project, args map[string]any) []string {
+	t.Helper()
+	args["project"] = p.ID
+	var page mcpPage
+	if text, isErr := call(t, cs, "list_units", args, &page); isErr {
+		t.Fatalf("list_units %v: %s", args, text)
+	}
+	keys := []string{}
+	for _, u := range page.Units {
+		keys = append(keys, u.Key)
+	}
+	var n struct{ Count int64 }
+	delete(args, "limit")
+	if text, isErr := call(t, cs, "count_units", args, &n); isErr || int(n.Count) != len(keys) {
+		t.Errorf("count_units %v = %d (%s), list found %v", args, n.Count, text, keys)
+	}
+	return keys
+}
+
+// The agent's two missing queries: a letter-level pattern, and "the source
+// has the name but the translation lacks the agreed form".
+func TestMCPRegexAndNotQuery(t *testing.T) {
+	cs, _, p, _ := newSweep(t, regexUnits())
+	if got := listKeys(t, cs, p, map[string]any{"query": `\bў\b`, "in": "target", "regex": true}); !reflect.DeepEqual(got, []string{"k3", "k4"}) {
+		t.Errorf(`\bў\b = %v`, got)
+	}
+	if got := listKeys(t, cs, p, map[string]any{"query": `[аеёіоуыэюя] ў\b`, "in": "target", "regex": true}); !reflect.DeepEqual(got, []string{"k4"}) {
+		t.Errorf("ў after a vowel = %v", got)
+	}
+	if got := listKeys(t, cs, p, map[string]any{"query": "Анна", "in": "source", "notQuery": "Ганна", "notIn": "target"}); !reflect.DeepEqual(got, []string{"k2"}) {
+		t.Errorf("name missed = %v", got)
+	}
+	// A broken pattern is a readable tool error.
+	var page mcpPage
+	text, isErr := call(t, cs, "list_units", map[string]any{"project": p.ID, "query": `(аб`, "regex": true}, &page)
+	if !isErr || !strings.Contains(text, "bad pattern") {
+		t.Errorf("broken pattern: isErr=%v %q", isErr, text)
+	}
+}
+
+// With regex=true a pair's find is a pattern and its replace a template.
+func TestMCPReplaceRegex(t *testing.T) {
+	cs, _, p, ids := newSweep(t, regexUnits())
+	after := func(out mcpSweep, key string) string {
+		s, _ := sampleOf(out, ids[key])
+		return s.After
+	}
+
+	// No query: the single pattern also selects the units.
+	out, text, isErr := sweep(t, cs, p, map[string]any{"regex": true, "pairs": []any{pair(`([аеёіоуыэюя]) ў\b`, "$1 у")}})
+	if isErr {
+		t.Fatal(text)
+	}
+	if out.Matched != 1 || out.Changed != 1 || after(out, "k4") != "Паўза у дзвярах" {
+		t.Errorf("vowel + ў = %+v", out)
+	}
+
+	// ignoreCase reaches both the candidate search and the replacement.
+	out, text, isErr = sweep(t, cs, p, map[string]any{"regex": true, "ignoreCase": true, "pairs": []any{pair(`джотар(а)\b`, "Дзётар$1")}})
+	if isErr {
+		t.Fatal(text)
+	}
+	if out.Changed != 1 || after(out, "k5") != "ДзётарА і Дзётара" {
+		t.Errorf("ignoreCase regex = %+v", out)
+	}
+
+	// wholeWord still guards a pattern's ends.
+	out, _, _ = sweep(t, cs, p, map[string]any{"regex": true, "wholeWord": true, "pairs": []any{pair(`[Пп]а`, "X")}})
+	if out.Matched != 0 {
+		t.Errorf("wholeWord regex matched inside words: %+v", out)
+	}
+
+	// A pattern that can match nothing-length text changes nothing.
+	out, _, _ = sweep(t, cs, p, map[string]any{"regex": true, "query": "Анна", "in": "source", "pairs": []any{pair(`x*`, "!")}})
+	if out.Matched != 0 {
+		t.Errorf("empty matches were replaced: %+v", out)
+	}
+
+	_, text, isErr = sweep(t, cs, p, map[string]any{"regex": true, "pairs": []any{pair(`(аб`, "x")}})
+	if !isErr || !strings.Contains(text, "bad pattern") {
+		t.Errorf("broken find: isErr=%v %q", isErr, text)
+	}
+
+	// Without regex the same find text is literal, as before.
+	out, _, _ = sweep(t, cs, p, map[string]any{"query": "Анна", "in": "source", "pairs": []any{pair(`а\b`, "x")}})
+	if out.Matched != 0 {
+		t.Errorf("literal find was read as a pattern: %+v", out)
 	}
 }

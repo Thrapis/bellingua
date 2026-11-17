@@ -5,11 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"strings"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/Thrapis/bellingua/internal/model"
+	"github.com/Thrapis/bellingua/internal/rx"
 	"github.com/Thrapis/bellingua/internal/store"
 )
 
@@ -28,8 +27,8 @@ const (
 )
 
 type replacePair struct {
-	Find    string `json:"find" jsonschema:"the text to find (plain string, not a pattern)"`
-	Replace string `json:"replace" jsonschema:"what to put instead; may be empty"`
+	Find    string `json:"find" jsonschema:"the text to find: a plain string, or with regex=true a pattern (see regex)"`
+	Replace string `json:"replace" jsonschema:"what to put instead; may be empty. With regex=true it is a template: $1 or ${name} is a group of the match, $$ a dollar sign"`
 }
 
 type replaceIn struct {
@@ -66,83 +65,57 @@ type mcpSweep struct {
 
 // replacer applies one pair.
 type replacer struct {
-	re                   *regexp.Regexp
-	repl                 string
-	whole                bool
-	checkStart, checkEnd bool // the find text starts/ends with a word character
+	re       *rx.Regexp
+	repl     string
+	template bool // repl is a template with $1 groups (regex mode)
+	whole    bool
 }
 
-func newReplacer(p replacePair, ignoreCase, whole bool) (*replacer, error) {
+func newReplacer(p replacePair, ignoreCase, whole, regex bool) (*replacer, error) {
 	if p.Find == "" {
 		return nil, badRequest("find must not be empty")
 	}
-	expr := regexp.QuoteMeta(p.Find)
+	expr := p.Find
+	if !regex {
+		expr = regexp.QuoteMeta(expr)
+	}
 	if ignoreCase {
 		expr = "(?i)" + expr
 	}
-	re, err := regexp.Compile(expr)
+	re, err := rx.Compile(expr)
 	if err != nil {
-		return nil, badRequest("bad find %q", p.Find)
+		return nil, badRequest("bad pattern %q: %v", p.Find, err)
 	}
-	first, _ := utf8.DecodeRuneInString(p.Find)
-	last, _ := utf8.DecodeLastRuneInString(p.Find)
-	return &replacer{re: re, repl: p.Replace, whole: whole, checkStart: isWordRune(first), checkEnd: isWordRune(last)}, nil
-}
-
-func isWordRune(r rune) bool {
-	return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsMark(r)
-}
-
-func isApostrophe(r rune) bool { return r == '\'' || r == '’' || r == 'ʼ' }
-
-// joinsWord reports whether the rune just before (or after) a match belongs
-// to a word, counting an apostrophe between two letters as part of it.
-func joinsWord(s string, i int, before bool) bool {
-	var r rune
-	var size int
-	if before {
-		r, size = utf8.DecodeLastRuneInString(s[:i])
-	} else {
-		r, size = utf8.DecodeRuneInString(s[i:])
-	}
-	if size == 0 {
-		return false
-	}
-	if isWordRune(r) {
-		return true
-	}
-	if !isApostrophe(r) {
-		return false
-	}
-	var n rune
-	if before {
-		n, _ = utf8.DecodeLastRuneInString(s[:i-size])
-	} else {
-		n, _ = utf8.DecodeRuneInString(s[i+size:])
-	}
-	return n != utf8.RuneError && isWordRune(n)
+	return &replacer{re: re, repl: p.Replace, template: regex, whole: whole}, nil
 }
 
 func (r *replacer) apply(s string) string {
-	locs := r.re.FindAllStringIndex(s, -1)
-	if locs == nil {
-		return s
-	}
-	var b strings.Builder
+	var out []byte
 	last := 0
-	for _, loc := range locs {
-		if r.whole && ((r.checkStart && joinsWord(s, loc[0], true)) || (r.checkEnd && joinsWord(s, loc[1], false))) {
-			continue
+	for _, m := range r.re.FindAllStringSubmatchIndex(s) {
+		if m[0] == m[1] {
+			continue // a pattern like x* matches nothing between any two letters
 		}
-		b.WriteString(s[last:loc[0]])
-		b.WriteString(r.repl)
-		last = loc[1]
+		if r.whole {
+			// An end of the match that is a word character must not continue into a word.
+			first, _ := utf8.DecodeRuneInString(s[m[0]:])
+			end, _ := utf8.DecodeLastRuneInString(s[:m[1]])
+			if (rx.IsWordRune(first) && rx.JoinsWord(s, m[0], true)) || (rx.IsWordRune(end) && rx.JoinsWord(s, m[1], false)) {
+				continue
+			}
+		}
+		out = append(out, s[last:m[0]]...)
+		if r.template {
+			out = r.re.Expand(out, r.repl, s, m)
+		} else {
+			out = append(out, r.repl...)
+		}
+		last = m[1]
 	}
-	if last == 0 && b.Len() == 0 {
+	if last == 0 && out == nil {
 		return s
 	}
-	b.WriteString(s[last:])
-	return b.String()
+	return string(append(out, s[last:]...))
 }
 
 // cutAround shortens a before/after pair to about sampleRunes runes around
@@ -178,7 +151,7 @@ func (s *Server) replaceInTargets(ctx context.Context, in replaceIn) (mcpSweep, 
 	}
 	reps := make([]*replacer, len(in.Pairs))
 	for i, p := range in.Pairs {
-		r, err := newReplacer(p, in.IgnoreCase, in.WholeWord)
+		r, err := newReplacer(p, in.IgnoreCase, in.WholeWord, in.Regex)
 		if err != nil {
 			return out, err
 		}
@@ -199,6 +172,9 @@ func (s *Server) replaceInTargets(ctx context.Context, in replaceIn) (mcpSweep, 
 		}
 		if len(in.Pairs) == 1 {
 			in.Query, in.In = in.Pairs[0].Find, "target"
+			if in.Regex && in.IgnoreCase {
+				in.Query = "(?i)" + in.Query
+			}
 		}
 	}
 	if in.In == "" {

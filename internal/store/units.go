@@ -13,6 +13,7 @@ import (
 
 	"github.com/Thrapis/bellingua/internal/model"
 	"github.com/Thrapis/bellingua/internal/qa"
+	"github.com/Thrapis/bellingua/internal/rx"
 )
 
 // Filter selects units of one project. Zero values mean "no constraint".
@@ -22,6 +23,9 @@ type Filter struct {
 	Dir       string // folder prefix ("a/b" matches a/b and a/b/...)
 	Query     string
 	In        string // comma-separated fields: source, target, key, context, lang:<code>; "both" = source,target (default)
+	Regex     bool   // Query and NotQuery are rx patterns (RE2, Unicode-aware  and \w), not substrings
+	NotQuery  string // units that do NOT contain this, looked for in NotIn; a unit without the field's text never contains it
+	NotIn     string // like In, for NotQuery
 	States    []model.State
 	QA        qa.Check // units having any of these bits; qa.Check(^0) = any issue
 	Errors    bool     // units with a QA error
@@ -153,49 +157,135 @@ func (f Filter) where() (string, []any) {
 	if f.Changed {
 		b.WriteString(" AND u.changed = 1")
 	}
-	if q := f.Query; q != "" {
-		var ors []string
-		in := parseIn(f.In)
-		if in.source || in.target {
-			cols := []string{"source", "target"}
-			switch {
-			case !in.target:
-				cols = cols[:1]
-			case !in.source:
-				cols = cols[1:]
-			}
-			if utf8.RuneCountInString(q) >= 3 {
-				// Trigram FTS: case-insensitive (Unicode-aware) substring match.
-				ors = append(ors, "u.id IN (SELECT rowid FROM units_fts WHERE units_fts MATCH ?)")
-				args = append(args, "{"+strings.Join(cols, " ")+"} : "+ftsPhrase(q))
-			} else {
-				// Too short for trigrams: plain, case-sensitive scan.
-				for _, c := range cols {
-					ors = append(ors, "instr(u."+c+", ?) > 0")
-					args = append(args, q)
-				}
-			}
-		}
-		if in.key {
-			ors = append(ors, "instr(u.key, ?) > 0")
-			args = append(args, q)
-		}
-		if in.context {
-			ors = append(ors, "instr(u.context, ?) > 0")
-			args = append(args, q)
-		}
-		for _, lang := range in.langs {
-			if utf8.RuneCountInString(q) >= 3 {
-				ors = append(ors, "u.id IN (SELECT unit_id FROM unit_langs_fts WHERE unit_langs_fts MATCH ? AND lang = ?)")
-				args = append(args, ftsPhrase(q), lang)
-			} else {
-				ors = append(ors, "u.id IN (SELECT unit_id FROM unit_langs WHERE lang = ? AND instr(target, ?) > 0)")
-				args = append(args, lang, q)
-			}
-		}
-		b.WriteString(" AND (" + strings.Join(ors, " OR ") + ")")
+	if f.Query != "" {
+		cond, a := match(f.Query, f.In, f.Regex)
+		b.WriteString(" AND " + cond)
+		args = append(args, a...)
+	}
+	if f.NotQuery != "" {
+		// coalesce: NULL (no translation) is "does not contain", not unknown.
+		cond, a := match(f.NotQuery, f.NotIn, f.Regex)
+		b.WriteString(" AND NOT coalesce(" + cond + ", 0)")
+		args = append(args, a...)
 	}
 	return b.String(), args
+}
+
+// Validate reports a filter that cannot run: a broken pattern.
+func (f Filter) Validate() error {
+	if !f.Regex {
+		return nil
+	}
+	for _, q := range []string{f.Query, f.NotQuery} {
+		if q == "" {
+			continue
+		}
+		if _, err := rx.Cached(q); err != nil {
+			return fmt.Errorf("bad pattern %q: %w", q, err)
+		}
+	}
+	return nil
+}
+
+// match builds the condition "q occurs in one of the fields of in", in
+// parentheses, and its args.
+func match(q, in string, regex bool) (string, []any) {
+	if regex {
+		return matchRegex(q, in)
+	}
+	var ors []string
+	var args []any
+	fields := parseIn(in)
+	if fields.source || fields.target {
+		cols := []string{"source", "target"}
+		switch {
+		case !fields.target:
+			cols = cols[:1]
+		case !fields.source:
+			cols = cols[1:]
+		}
+		if utf8.RuneCountInString(q) >= 3 {
+			// Trigram FTS: case-insensitive (Unicode-aware) substring match.
+			ors = append(ors, "u.id IN (SELECT rowid FROM units_fts WHERE units_fts MATCH ?)")
+			args = append(args, "{"+strings.Join(cols, " ")+"} : "+ftsPhrase(q))
+		} else {
+			// Too short for trigrams: plain, case-sensitive scan.
+			for _, c := range cols {
+				ors = append(ors, "instr(u."+c+", ?) > 0")
+				args = append(args, q)
+			}
+		}
+	}
+	if fields.key {
+		ors = append(ors, "instr(u.key, ?) > 0")
+		args = append(args, q)
+	}
+	if fields.context {
+		ors = append(ors, "instr(u.context, ?) > 0")
+		args = append(args, q)
+	}
+	for _, lang := range fields.langs {
+		if utf8.RuneCountInString(q) >= 3 {
+			ors = append(ors, "u.id IN (SELECT unit_id FROM unit_langs_fts WHERE unit_langs_fts MATCH ? AND lang = ?)")
+			args = append(args, ftsPhrase(q), lang)
+		} else {
+			ors = append(ors, "u.id IN (SELECT unit_id FROM unit_langs WHERE lang = ? AND instr(target, ?) > 0)")
+			args = append(args, lang, q)
+		}
+	}
+	return "(" + strings.Join(ors, " OR ") + ")", args
+}
+
+// matchRegex is match for a pattern: the rx() SQL function tests each text.
+// When every match must contain some literal text of 3+ characters, the
+// trigram index narrows the candidates first; otherwise the pattern runs on
+// every unit the rest of the filter leaves.
+func matchRegex(q, in string) (string, []any) {
+	lit := ""
+	if re, err := rx.Cached(q); err == nil {
+		lit = re.Literal()
+	} // a broken pattern fails in rx() when the query runs
+	var ors []string
+	var args []any
+	fields := parseIn(in)
+	if fields.source || fields.target {
+		var cols, tests []string
+		if fields.source {
+			cols, tests = append(cols, "source"), append(tests, "rx(?, u.source)")
+		}
+		if fields.target {
+			cols, tests = append(cols, "target"), append(tests, "rx(?, u.target)")
+		}
+		cond := strings.Join(tests, " OR ")
+		if lit != "" {
+			ors = append(ors, "(u.id IN (SELECT rowid FROM units_fts WHERE units_fts MATCH ?) AND ("+cond+"))")
+			args = append(args, "{"+strings.Join(cols, " ")+"} : "+ftsPhrase(lit))
+		} else {
+			ors = append(ors, cond)
+		}
+		for range tests {
+			args = append(args, q)
+		}
+	}
+	if fields.key {
+		ors = append(ors, "rx(?, u.key)")
+		args = append(args, q)
+	}
+	if fields.context {
+		ors = append(ors, "rx(?, u.context)")
+		args = append(args, q)
+	}
+	for _, lang := range fields.langs {
+		if lit != "" {
+			ors = append(ors, `u.id IN (SELECT unit_id FROM unit_langs WHERE lang = ? AND rx(?, target)
+				AND unit_id IN (SELECT unit_id FROM unit_langs_fts WHERE unit_langs_fts MATCH ? AND lang = ?))`)
+			args = append(args, lang, q, ftsPhrase(lit), lang)
+		} else {
+			ors = append(ors, "u.id IN (SELECT unit_id FROM unit_langs WHERE lang = ? AND rx(?, target))")
+			args = append(args, lang, q)
+		}
+	}
+	return "(" + strings.Join(ors, " OR ") + ")", args
 }
 
 // searchIn is the set of fields a query is looked for in.
@@ -362,7 +452,7 @@ func preview(blob []byte, plain string) ([]model.Piece, int, bool, error) {
 // Count returns how many units match f. Filters on location and state alone
 // are answered from the per-file counters without touching units.
 func (s *Store) Count(ctx context.Context, f Filter) (int64, error) {
-	if f.Query == "" && f.QA == 0 && !f.Errors && !f.Changed && f.SameAs == 0 {
+	if f.Query == "" && f.NotQuery == "" && f.QA == 0 && !f.Errors && !f.Changed && f.SameAs == 0 {
 		return s.countFromFiles(ctx, f)
 	}
 	where, args := f.where()

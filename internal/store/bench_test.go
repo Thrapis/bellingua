@@ -167,3 +167,39 @@ func BenchmarkUnitLangsFor(b *testing.B) {
 		}
 	}
 }
+
+// Regex with a literal: the trigram index narrows, the pattern verifies.
+func BenchmarkRegexLiteral(b *testing.B) {
+	benchList(b, Filter{Query: `Орбит\p{L}*\b`, In: "source", Regex: true}, nil)
+}
+
+// Regex with no literal of 3+ characters: the pattern runs on every unit
+// until 200 match (a common ending, so the scan stops early).
+func BenchmarkRegexNoLiteral(b *testing.B) {
+	benchList(b, Filter{Query: `ў\b`, In: "target", Regex: true}, nil)
+}
+
+// Worst case: a rare pattern without a literal scans every unit.
+func BenchmarkRegexNoLiteralRare(b *testing.B) {
+	benchList(b, Filter{Query: `ъ\b`, In: "source", Regex: true}, nil)
+}
+
+func BenchmarkRegexCount(b *testing.B) {
+	st, pid := benchStore(b)
+	ctx := context.Background()
+	for b.Loop() {
+		if _, err := st.Count(ctx, Filter{ProjectID: pid, Query: `ў\b`, In: "target", Regex: true}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// A name in the source, its agreed form missing from the translation.
+func BenchmarkNotQuery(b *testing.B) {
+	benchList(b, Filter{Query: "Орбита", In: "source", NotQuery: "Арбіта", NotIn: "target"}, nil)
+}
+
+// NotQuery alone: everything except the matches, first 200.
+func BenchmarkNotQueryAlone(b *testing.B) {
+	benchList(b, Filter{NotQuery: "что", NotIn: "target"}, nil)
+}

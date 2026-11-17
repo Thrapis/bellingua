@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { ArrowUpDown, Languages, ListFilter, X } from "lucide-react";
 import { STATES, SORTS, type Filter, type ProjectLang, type QACheck, type Sort, type State } from "@/lib/api";
 import { langName } from "@/lib/lang";
@@ -13,13 +14,14 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StateDot, stateLabel } from "@/components/pieces";
 
 /** URL patch: undefined removes a parameter. */
-export type FilterPatch = Partial<Record<"in" | "state" | "qa" | "changed" | "same", string | undefined>>;
+export type FilterPatch = Partial<Record<"in" | "regex" | "nq" | "nin" | "state" | "qa" | "changed" | "same", string | undefined>>;
 
 const FIELDS = [
   { id: "source", label: "Source" },
@@ -61,7 +63,7 @@ export function FilterMenu({ filter, qaChecks, langs, onChange }: Props) {
   const langCodes = langs.map((l) => l.lang);
   const setIn = (fields: string[]) => fields.length && onChange({ in: joinIn(fields, langCodes) });
   const active =
-    (filter.in ? 1 : 0) + (states.length ? 1 : 0) + (filter.qa ? 1 : 0) + (filter.changed ? 1 : 0) + (filter.same ? 1 : 0);
+    (filter.in ? 1 : 0) + (filter.regex ? 1 : 0) + (filter.nq ? 1 : 0) + (states.length ? 1 : 0) + (filter.qa ? 1 : 0) + (filter.changed ? 1 : 0) + (filter.same ? 1 : 0);
   const setStates = (s: State[]) => onChange({ state: s.length ? s.join(",") : undefined });
 
   return (
@@ -110,6 +112,28 @@ export function FilterMenu({ filter, qaChecks, langs, onChange }: Props) {
             )}
           </div>
 
+          <label className="flex items-center gap-2 text-sm" title="RE2 syntax.  and \w work on any script; (?i) ignores case.">
+            <Checkbox checked={!!filter.regex} onCheckedChange={(v) => onChange({ regex: v ? "1" : undefined })} />
+            Search text is a regular expression
+          </label>
+
+          <div className="grid gap-1.5">
+            <Label className="text-xs text-muted-foreground">Leave out strings containing</Label>
+            <NotBox value={filter.nq ?? ""} onCommit={(v) => onChange({ nq: v || undefined, nin: v ? filter.nin : undefined })} />
+            {filter.nq && (
+              <Select value={filter.nin ?? "both"} onValueChange={(v) => onChange({ nin: v === "both" ? undefined : v })}>
+                <SelectTrigger size="sm" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="both">in source or translation</SelectItem>
+                  <SelectItem value="source">in the source</SelectItem>
+                  <SelectItem value="target">in the translation</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+
           <div className="grid gap-1.5">
             <Label className="text-xs text-muted-foreground">State</Label>
             <div className="grid grid-cols-2 gap-1.5">
@@ -155,7 +179,7 @@ export function FilterMenu({ filter, qaChecks, langs, onChange }: Props) {
               size="sm"
               variant="ghost"
               className="justify-self-start"
-              onClick={() => onChange({ in: undefined, state: undefined, qa: undefined, changed: undefined, same: undefined })}
+              onClick={() => onChange({ in: undefined, regex: undefined, nq: undefined, nin: undefined, state: undefined, qa: undefined, changed: undefined, same: undefined })}
             >
               <X /> Reset filters
             </Button>
@@ -172,6 +196,13 @@ export function FilterMenu({ filter, qaChecks, langs, onChange }: Props) {
             </span>
           }
           onRemove={() => onChange({ in: undefined })}
+        />
+      )}
+      {filter.regex && <Chip label="Regex" onRemove={() => onChange({ regex: undefined })} />}
+      {filter.nq && (
+        <Chip
+          label={`Without “${filter.nq.length > 24 ? filter.nq.slice(0, 24) + "…" : filter.nq}”${filter.nin === "source" ? " in source" : filter.nin === "target" ? " in translation" : ""}`}
+          onRemove={() => onChange({ nq: undefined, nin: undefined })}
         />
       )}
       {states.length > 0 && (
@@ -192,6 +223,21 @@ export function FilterMenu({ filter, qaChecks, langs, onChange }: Props) {
       {filter.same && <Chip label="Identical source" onRemove={() => onChange({ same: undefined })} />}
     </>
   );
+}
+
+/** The "leave out" text box keeps its own copy and commits after a pause, like the search box. */
+function NotBox({ value, onCommit }: { value: string; onCommit: (v: string) => void }) {
+  // null: not being edited, show the filter's value (so a reset clears the box).
+  const [edit, setEdit] = useState<string | null>(null);
+  useEffect(() => {
+    if (edit === null) return;
+    const t = setTimeout(() => {
+      onCommit(edit);
+      setEdit(null);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [edit, onCommit]);
+  return <Input value={edit ?? value} onChange={(e) => setEdit(e.target.value)} placeholder="e.g. Ганна" className="h-8" />;
 }
 
 function Chip({ label, onRemove }: { label: React.ReactNode; onRemove: () => void }) {
