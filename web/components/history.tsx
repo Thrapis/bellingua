@@ -246,10 +246,10 @@ function Entry({ pid, row }: { pid: number; row: HistoryRow }) {
 
 const ELLIPSIS = <span className="text-muted-foreground">…</span>;
 
-/** Tones of a change: green is new text, orange replaced text, red deleted text. */
+/** Tones of a change: green is new text, red is text that was removed. A replaced
+ *  word shows both: the old one in red, struck through, then the new one in green. */
 const DIFF = {
   added: "rounded-sm bg-emerald-500/20 text-emerald-800 no-underline dark:text-emerald-200",
-  replaced: "rounded-sm bg-orange-500/25 text-orange-800 dark:text-orange-200",
   removed: "rounded-sm bg-red-500/15 text-red-700 line-through decoration-red-500/60 dark:text-red-300",
 };
 
@@ -263,7 +263,12 @@ function Changes({ old, text }: { old: string; text: string }) {
       case "removed":
         return <del key={i} className={DIFF.removed}>{s.text}</del>;
       case "replaced":
-        return <mark key={i} className={DIFF.replaced} title={`was: ${s.old}`}>{s.text}</mark>;
+        return (
+          <span key={i}>
+            <del className={DIFF.removed}>{s.old}</del>
+            <ins className={DIFF.added}>{s.text}</ins>
+          </span>
+        );
       default:
         return s.text;
     }
