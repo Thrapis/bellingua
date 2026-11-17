@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -33,7 +34,9 @@ For many units at once: list_units with langs (e.g. ["uk","en"]) puts those extr
 
 Searching: query and notQuery are substrings by default (3+ characters match case-insensitively, shorter ones case-sensitively). With regex=true they are RE2 patterns whose \b and \w work on Cyrillic and treat an apostrophe between letters as part of the word: query "ў\b" in "target" finds ў at a word end; query "Анна" in "source" with notQuery "Ганна" notIn "target" finds units whose translation lacks the agreed form. A pattern with 3+ literal characters in a row is much faster than one without.
 
-Terminology sweeps: when a term is decided and the old form (with its inflections) sits in many units, do not retype them; use replace_in_targets with pairs per form (with regex=true each find is a pattern and each replace a template with $1 groups). It is a dry run unless you pass dryRun=false: run the dry run first, check the samples and failures (a replacement that breaks the codes is refused for that unit), then run it for real. Approved units are never touched, states stay as they are. ignoreCase inserts the replacement as written; add preserveCase to give each replacement the case of the text it replaces (ДЖОТАРО -> ДЖОТАРА, Джотаро -> Джотара). full=true lists every matched unit (id, before, after, approved) instead of ten samples, and pairs says per pair how many units and occurrences it found; a pair with none and alreadyHave > 0 was probably done before, one with alreadyHave 0 may have a typo in find. A real run returns a sweepId: revert_sweep restores the old texts (dry run by default; units edited or approved since are skipped).
+Finding and re-reading: lastOrigin (ai = what you changed last, edit = the editor) and modifiedSince (90m, 48h, 2026-11-17) narrow any unit filter to what changed; export_units writes the matching units with whole texts to a TSV and returns its path, so you can read a selection from disk instead of paging (re-export to see what changed since); list_words ranks the distinct words of the translations (maxCount 1 = words that occur once, where typos hide); list_units full=true returns whole texts for a page of long strings.
+
+Terminology sweeps: when a term is decided and the old form (with its inflections) sits in many units, do not retype them; use replace_in_targets with pairs per form (several pairs need no query: the units holding any find text are picked; with regex=true each find is a pattern and each replace a template with $1 groups). It is a dry run unless you pass dryRun=false: run the dry run first, check the samples and failures (a replacement that breaks the codes is refused for that unit), then run it for real. Approved units are never touched, states stay as they are. ignoreCase inserts the replacement as written; add preserveCase to give each replacement the case of the text it replaces (ДЖОТАРО -> ДЖОТАРА, Джотаро -> Джотара). full=true lists every matched unit (id, before, after, approved) instead of ten samples, and pairs says per pair how many units and occurrences it found; a pair with none and alreadyHave > 0 was probably done before, one with alreadyHave 0 may have a typo in find. A real run returns a sweepId: revert_sweep restores the old texts (dry run by default; units edited or approved since are skipped).
 
 save_translation, save_translations and replace_in_targets mark your edits with origin "ai". You can overwrite anything below approved (the previous text stays in the unit's history), but it never changes an approved unit. Glossary edits trigger a project QA recheck after 2 s.`
 
@@ -113,6 +116,9 @@ type filterIn struct {
 	Errors   bool     `json:"errors,omitempty" jsonschema:"only units with QA errors"`
 	Changed  bool     `json:"changed,omitempty" jsonschema:"only units whose source changed on the last import"`
 	Same     int64    `json:"same,omitempty" jsonschema:"only units with the same source as this unit id"`
+	// ModifiedSince and LastOrigin find what was changed (by you, the editor, an import).
+	ModifiedSince string `json:"modifiedSince,omitempty" jsonschema:"only units changed since then: a duration back from now (90m, 48h), a date (2026-11-17), an RFC 3339 time or unix seconds"`
+	LastOrigin    string `json:"lastOrigin,omitempty" jsonschema:"only units whose latest change came from: ai (you), edit (the editor), mt, tm, bulk, import. lastOrigin ai finds exactly what you changed last"`
 }
 
 func (in filterIn) filter() (store.Filter, error) {
@@ -122,6 +128,21 @@ func (in filterIn) filter() (store.Filter, error) {
 	if err := f.Validate(); err != nil {
 		return f, badRequest("%v", err)
 	}
+	if in.ModifiedSince != "" {
+		since, err := parseSince(in.ModifiedSince, time.Now())
+		if err != nil {
+			return f, err
+		}
+		f.UpdatedSince = since
+	}
+	if in.LastOrigin != "" {
+		switch in.LastOrigin {
+		case "ai", "edit", "mt", "tm", "bulk", "import":
+			f.LastOrigin = in.LastOrigin
+		default:
+			return f, badRequest("lastOrigin must be ai, edit, mt, tm, bulk or import, not %q", in.LastOrigin)
+		}
+	}
 	return f, filterLists(&f, in.States, in.QA)
 }
 
@@ -130,6 +151,7 @@ type listIn struct {
 	Sort   string `json:"sort,omitempty" jsonschema:"file (default), updated, old (least recently changed), short or long (source length), tshort or tlong (translation length; untranslated units are left out), status (untranslated, mt, translated, approved)"`
 	Cursor string `json:"cursor,omitempty" jsonschema:"the next value of the previous page"`
 	Limit  int    `json:"limit,omitempty" jsonschema:"page size, 1-200 (default 50)"`
+	Full   bool   `json:"full,omitempty" jsonschema:"whole texts instead of previews, for pages of long strings; a full page holds at most 50 rows"`
 	// Langs adds the project's extra-language texts (see get_unit_langs) to each row.
 	Langs []string `json:"langs,omitempty" jsonschema:"extra languages whose texts to add to each row as refs, e.g. [\"uk\",\"en\"]"`
 }
@@ -462,6 +484,9 @@ func (s *Server) mcpTools(srv *mcp.Server) {
 			if limit <= 0 || limit > 200 {
 				limit = 50
 			}
+			if in.Full {
+				limit = min(limit, 50)
+			}
 			rows, next, err := s.st.List(ctx, f, sort, after, limit)
 			if err != nil {
 				return nil, err
@@ -481,6 +506,13 @@ func (s *Server) mcpTools(srv *mcp.Server) {
 				row := mcpRow{ID: r.ID, File: r.FileID, Key: r.Key, Context: r.Context,
 					Source: model.Plain(r.Source), Target: plainPtr(r.Target), Codes: model.Codes(r.Source),
 					State: r.State.String(), QA: checkIDs(r.QA), Truncated: r.Truncated, Changed: r.Changed}
+				if in.Full && r.Truncated {
+					u, err := s.st.Unit(ctx, r.ID, false)
+					if err != nil {
+						return nil, err
+					}
+					row.Source, row.Target, row.Truncated = model.Plain(u.Source), plainPtr(u.Target), false
+				}
 				for _, l := range refs[r.ID] {
 					if row.Refs == nil {
 						row.Refs = map[string]string{}
@@ -495,6 +527,14 @@ func (s *Server) mcpTools(srv *mcp.Server) {
 			}
 			return out, nil
 		})
+
+	tool(s, srv, &mcp.Tool{Name: "list_words", Annotations: readOnly,
+		Description: "The vocabulary of the translations: each distinct word once with how often it occurs (case folded, codes and punctuation left out; an apostrophe or hyphen inside a word belongs to it, and аб'ект / аб’ект count apart). Takes the list_units filter to choose the units (dir, file, states, query, regex, lastOrigin...), field source for source words, minCount / maxCount (maxCount 1 = words that occur once, where typos hide), sort count or alpha, limit (default 200, max 2000) and offset. Returns {words [{word, count}], total, units}. Use it to turn a typo hunt into a ranked list; check suspicious words with list_units (regex) and fix them with replace_in_targets."},
+		func(ctx context.Context, in wordsIn) (any, error) { return s.listWords(ctx, in) })
+
+	tool(s, srv, &mcp.Tool{Name: "export_units", Annotations: writes,
+		Description: "Writes the units matching the list_units filter to a TSV file with whole texts (columns id, state, updated, path, key, source, target; backslash, tab and line breaks inside texts are escaped as \\\\, \\t, \\n, \\r) and returns {path, rows, bytes}. path is only a file name (.tsv or .txt); the file is written to the exports folder next to the database, replacing a file of that name, and you read it from the returned absolute path. Use it to read a whole selection at once, e.g. lastOrigin ai to re-read exactly what you changed, or modifiedSince to see what changed since your last export."},
+		func(ctx context.Context, in exportIn) (any, error) { return s.exportUnits(ctx, in) })
 
 	tool(s, srv, &mcp.Tool{Name: "count_units", Annotations: readOnly,
 		Description: "Counts the units matching a filter (the same filter as list_units)."},

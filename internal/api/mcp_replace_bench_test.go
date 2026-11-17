@@ -76,3 +76,75 @@ func TestReplaceInTargetsCorpus(t *testing.T) {
 	run(true, find+"~")
 	run(false, "‹"+find+"›")
 }
+
+// TestStepCCorpus times list_words, export_units and a two-pair sweep with no
+// query on a real corpus (a copy, as above; exports land next to the copy):
+// BELLINGUA_BENCH_DB=path/to.db go test -run StepCCorpus -v ./internal/api
+func TestStepCCorpus(t *testing.T) {
+	src := os.Getenv("BELLINGUA_BENCH_DB")
+	if src == "" {
+		t.Skip("BELLINGUA_BENCH_DB not set")
+	}
+	dst := filepath.Join(t.TempDir(), "copy.db")
+	copyFile(t, src, dst)
+	if _, err := os.Stat(src + "-wal"); err == nil {
+		copyFile(t, src+"-wal", dst+"-wal")
+	}
+	ctx := context.Background()
+	st, err := store.Open(ctx, dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ps, err := st.Projects(ctx)
+	if err != nil || len(ps) == 0 {
+		t.Fatalf("no project: %v", err)
+	}
+	bm, _ := backup.NewManager(st, config.Backup{}, slog.New(slog.DiscardHandler))
+	cfg := config.Default()
+	cfg.DB = dst
+	s := New(ctx, st, cfg, nil, bm, nil, slog.New(slog.DiscardHandler))
+	pid := ps[0].ID
+	timed := func(name string, fn func()) {
+		t0 := time.Now()
+		fn()
+		t.Logf("%s: %v", name, time.Since(t0).Round(time.Millisecond))
+	}
+	for i := 0; i < 2; i++ { // cold, warm
+		timed("list_words (all targets)", func() {
+			out, err := s.listWords(ctx, wordsIn{filterIn: filterIn{Project: pid}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("  %d units, %d distinct words, top %+v", out.Units, out.Total, out.Words[:3])
+		})
+	}
+	timed("list_words maxCount 1, regex-filtered", func() {
+		if _, err := s.listWords(ctx, wordsIn{filterIn: filterIn{Project: pid, Query: `ў\b`, In: "target", Regex: true}, MaxCount: 1}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	timed("export_units (whole project)", func() {
+		out, err := s.exportUnits(ctx, exportIn{filterIn: filterIn{Project: pid}, Path: "all.tsv"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("  %d rows, %.1f MB", out.Rows, float64(out.Bytes)/1e6)
+	})
+	timed("export_units lastOrigin ai", func() {
+		out, err := s.exportUnits(ctx, exportIn{filterIn: filterIn{Project: pid, LastOrigin: "ai"}, Path: "ai.tsv"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("  %d rows", out.Rows)
+	})
+	dry := true
+	timed("replace_in_targets, two pairs, no query (dry run)", func() {
+		out, err := s.replaceInTargets(ctx, replaceIn{filterIn: filterIn{Project: pid}, DryRun: &dry, Limit: 500,
+			Pairs: []replacePair{{Find: "Орбита", Replace: "X"}, {Find: "Ў", Replace: "Y"}}, IgnoreCase: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("  matched %d next=%q", out.Matched, out.Next)
+	})
+}

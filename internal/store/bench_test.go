@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/Thrapis/bellingua/internal/model"
 	"github.com/Thrapis/bellingua/internal/qa"
@@ -202,4 +203,36 @@ func BenchmarkNotQuery(b *testing.B) {
 // NotQuery alone: everything except the matches, first 200.
 func BenchmarkNotQueryAlone(b *testing.B) {
 	benchList(b, Filter{NotQuery: "что", NotIn: "target"}, nil)
+}
+
+// Units changed lately: units_updated serves the bound, the rest is cheap.
+func BenchmarkListUpdatedSince(b *testing.B) {
+	benchList(b, Filter{UpdatedSince: time.Now().Add(-24 * 365 * time.Hour).Unix()}, nil)
+}
+
+// "What the agent changed last": a history lookup per unit until 200 match.
+func BenchmarkListLastOriginAI(b *testing.B) { benchList(b, Filter{LastOrigin: "ai"}, nil) }
+
+// Worst case: an origin few units have, so the lookup runs on every unit.
+func BenchmarkListLastOriginRare(b *testing.B) { benchList(b, Filter{LastOrigin: "tm"}, nil) }
+
+func BenchmarkCountLastOriginAI(b *testing.B) {
+	st, pid := benchStore(b)
+	ctx := context.Background()
+	for b.Loop() {
+		if _, err := st.Count(ctx, Filter{ProjectID: pid, LastOrigin: "ai"}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// ScanTexts over the whole project: what list_words reads.
+func BenchmarkScanTexts(b *testing.B) {
+	st, pid := benchStore(b)
+	ctx := context.Background()
+	for b.Loop() {
+		if _, err := st.ScanTexts(ctx, Filter{ProjectID: pid}, true, func(string) {}); err != nil {
+			b.Fatal(err)
+		}
+	}
 }

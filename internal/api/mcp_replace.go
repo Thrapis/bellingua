@@ -29,7 +29,7 @@ const (
 )
 
 type replacePair struct {
-	Find    string `json:"find" jsonschema:"the text to find: a plain string, or with regex=true a pattern (see regex)"`
+	Find    string `json:"find" jsonschema:"the text to find: a plain string, or with regex=true a pattern (see regex). In a plain string a backslash followed by n is those two characters; for a line break send a real line break, or use regex=true where \\n is one"`
 	Replace string `json:"replace" jsonschema:"what to put instead; may be empty. With regex=true it is a template: $1 or ${name} is a group of the match, $$ a dollar sign"`
 }
 
@@ -81,8 +81,9 @@ type mcpSweep struct {
 	Samples         []mcpSweepSample  `json:"samples"`
 	Matches         []mcpSweepSample  `json:"matches,omitempty"` // every matched unit, with full=true
 	Failures        []mcpSweepFailure `json:"failures"`
-	SweepID         string            `json:"sweepId,omitempty"` // a real run's handle for revert_sweep
-	Next            string            `json:"next,omitempty"`    // cursor when the limit stopped the sweep
+	Warnings        []string          `json:"warnings,omitempty"` // things worth a second look in the request
+	SweepID         string            `json:"sweepId,omitempty"`  // a real run's handle for revert_sweep
+	Next            string            `json:"next,omitempty"`     // cursor when the limit stopped the sweep
 }
 
 // replacer applies one pair.
@@ -239,12 +240,10 @@ func (s *Server) replaceInTargets(ctx context.Context, in replaceIn) (mcpSweep, 
 		in.States = []string{"mt", "translated"}
 	}
 	// Candidates are found by searching the targets for the find text. With
-	// several pairs one query can't cover them all, so the caller must give a
-	// query or narrow the units by folder or file.
+	// one pair that text is the query; with several and no query of the
+	// caller's, any of the find texts will do (an alternation, below).
+	multi := in.Query == "" && len(in.Pairs) > 1
 	if in.Query == "" {
-		if len(in.Pairs) > 1 && in.Dir == "" && in.File == 0 {
-			return out, badRequest("with several pairs give a query, dir or file to choose the units to scan")
-		}
 		if len(in.Pairs) == 1 {
 			in.Query, in.In = in.Pairs[0].Find, "target"
 			if in.Regex && in.IgnoreCase {
@@ -258,6 +257,31 @@ func (s *Server) replaceInTargets(ctx context.Context, in replaceIn) (mcpSweep, 
 	f, err := in.filter()
 	if err != nil {
 		return out, err
+	}
+	if multi {
+		// The pairs' find texts as one pattern: the units holding any of them.
+		// Plain finds are quoted, and a plain notQuery stays plain (and keeps
+		// the case rules of a substring search) now that the filter is a pattern.
+		alts := make([]string, len(in.Pairs))
+		for i, p := range in.Pairs {
+			alts[i] = "(?:" + p.Find + ")"
+			if !in.Regex {
+				alts[i] = "(?:" + regexp.QuoteMeta(p.Find) + ")"
+			}
+		}
+		f.Query, f.In, f.Regex = strings.Join(alts, "|"), "target", true
+		if in.IgnoreCase {
+			f.Query = "(?i:" + f.Query + ")"
+		}
+		if !in.Regex && f.NotQuery != "" {
+			f.NotQuery = regexp.QuoteMeta(f.NotQuery)
+			if utf8.RuneCountInString(in.NotQuery) >= 3 {
+				f.NotQuery = "(?i)" + f.NotQuery
+			}
+		}
+		if err := f.Validate(); err != nil {
+			return out, badRequest("%v", err)
+		}
 	}
 	after, err := parseCursor(in.Cursor)
 	if err != nil {
@@ -359,6 +383,16 @@ func (s *Server) replaceInTargets(ctx context.Context, in replaceIn) (mcpSweep, 
 	}
 	if !out.DryRun && out.Changed > 0 {
 		out.SweepID = batch
+	}
+	for _, rp := range reps {
+		if rp.occurrences == 0 && !in.Regex {
+			for _, esc := range []string{"\\n", "\\r", "\\t"} {
+				if strings.Contains(rp.find, esc) {
+					out.Warnings = append(out.Warnings, fmt.Sprintf("find %q contains a backslash followed by %q, which matches those two characters, not a line break or tab; put a real line break (tab) in find, or use regex=true, where %s is one", rp.find, esc[1:], esc))
+					break
+				}
+			}
+		}
 	}
 	return out, nil
 }

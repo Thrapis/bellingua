@@ -358,6 +358,33 @@ the pieces are recovered with `model.SplitTarget`:
     the text the sweep wrote; units edited again or approved since are
     `skipped`. Only `sweep-` ids are accepted; the revert is itself saved with
     origin `ai` under a `revert-` batch and is not revertible.
+- **Several pairs without a query**: the candidates are the units whose target
+  matches the alternation of all find texts (quoted unless `regex`, `(?i:...)`
+  with `ignoreCase`), so the SQL `rx()` function does the scan (a dry run of two
+  pairs over 180k units: about 130 ms); a plain `notQuery` is quoted along.
+  `warnings` tells when a plain find with a literal backslash-`n`/`r`/`t`
+  matched nothing (that is two characters, not a line break).
+- **Finding what changed**: `Filter.UpdatedSince` (`modifiedSince`: `90m`,
+  `48h`, a date, RFC 3339 or unix seconds) and `Filter.LastOrigin` (`lastOrigin`:
+  `ai|edit|mt|tm|bulk|import`, the origin of the unit's latest history entry,
+  looked up per unit through `history_unit`) are on every tool that takes the
+  filter; both keep `Count` off the `files` counters. A rare origin scans every
+  unit (about 300 ms on 180k).
+- **`list_words`** (`api/mcp_words.go`, `store.ScanTexts`): distinct words of the
+  filtered targets (or sources) with counts, from the text pieces only (codes
+  never count). A word is letters, digits and marks, with a single apostrophe or
+  hyphen between two of them; case folded unless `caseSensitive`; ranked by
+  count then alphabet (or `alpha`), `minCount`/`maxCount`, `limit` (max 2000)
+  and `offset` (recomputed per call). About 0.8 s for all 183k targets.
+- **`export_units`** (`api/mcp_export.go`, `store.ExportUnits`) writes the filtered
+  units, whole texts with codes inline, to a TSV (`id state updated path key
+  source target`; backslash, tab and line breaks are escaped as two-character
+  sequences: backslash-backslash, backslash-t, backslash-n, backslash-r).
+  The agent gives a file *name* only (`[A-Za-z0-9._-]`, `.tsv` or `.txt`, no
+  Windows device names); the file is written under `exports/` next to the
+  database through a temp file and a rename, replacing the same name. About
+  0.5 s and 55 MB for the whole corpus. `list_units` `full=true` gives whole
+  texts for a page (at most 50 rows).
 - **Reference texts in lists**: `list_units` takes `langs` (e.g. `["uk","en"]`)
   and adds `refs {lang: text}` (cut to `PreviewRunes`, `refsTruncated`) to each
   row via `store.UnitLangsFor`, one `unit_langs` PK query per page that leaves

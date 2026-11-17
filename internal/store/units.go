@@ -26,11 +26,16 @@ type Filter struct {
 	Regex     bool   // Query and NotQuery are rx patterns (RE2, Unicode-aware  and \w), not substrings
 	NotQuery  string // units that do NOT contain this, looked for in NotIn; a unit without the field's text never contains it
 	NotIn     string // like In, for NotQuery
-	States    []model.State
-	QA        qa.Check // units having any of these bits; qa.Check(^0) = any issue
-	Errors    bool     // units with a QA error
-	Changed   bool     // source changed by a re-import
-	SameAs    int64    // units whose source is identical to this unit's (itself included)
+	// UpdatedSince keeps units changed at or after this unix time (units_updated).
+	UpdatedSince int64
+	// LastOrigin keeps units whose latest history entry has this origin
+	// (import | edit | mt | tm | ai | bulk): "what the agent changed last".
+	LastOrigin string
+	States     []model.State
+	QA         qa.Check // units having any of these bits; qa.Check(^0) = any issue
+	Errors     bool     // units with a QA error
+	Changed    bool     // source changed by a re-import
+	SameAs     int64    // units whose source is identical to this unit's (itself included)
 }
 
 // Sort is a list order. Every order is served by an index and paged by
@@ -156,6 +161,14 @@ func (f Filter) where() (string, []any) {
 	}
 	if f.Changed {
 		b.WriteString(" AND u.changed = 1")
+	}
+	if f.UpdatedSince > 0 {
+		b.WriteString(" AND u.updated_at >= ?")
+		args = append(args, f.UpdatedSince)
+	}
+	if f.LastOrigin != "" {
+		b.WriteString(" AND (SELECT origin FROM history h WHERE h.unit_id = u.id ORDER BY h.id DESC LIMIT 1) = ?")
+		args = append(args, f.LastOrigin)
 	}
 	if f.Query != "" {
 		cond, a := match(f.Query, f.In, f.Regex)
@@ -452,7 +465,7 @@ func preview(blob []byte, plain string) ([]model.Piece, int, bool, error) {
 // Count returns how many units match f. Filters on location and state alone
 // are answered from the per-file counters without touching units.
 func (s *Store) Count(ctx context.Context, f Filter) (int64, error) {
-	if f.Query == "" && f.NotQuery == "" && f.QA == 0 && !f.Errors && !f.Changed && f.SameAs == 0 {
+	if f.Query == "" && f.NotQuery == "" && f.UpdatedSince == 0 && f.LastOrigin == "" && f.QA == 0 && !f.Errors && !f.Changed && f.SameAs == 0 {
 		return s.countFromFiles(ctx, f)
 	}
 	where, args := f.where()

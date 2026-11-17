@@ -74,7 +74,7 @@ func TestMCPToolList(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	for _, want := range []string{"list_projects", "get_tree", "list_units", "count_units", "get_unit",
-		"get_unit_tm", "get_unit_langs", "machine_translate", "save_translation", "save_translations", "replace_in_targets", "revert_sweep", "propagate_translation",
+		"get_unit_tm", "get_unit_langs", "machine_translate", "save_translation", "save_translations", "replace_in_targets", "revert_sweep", "list_words", "export_units", "propagate_translation",
 		"list_terms", "term_forms", "create_term", "update_term", "delete_term", "recheck_qa", "list_jobs", "get_job"} {
 		if !slices.Contains(names, want) {
 			t.Errorf("missing tool %s (have %v)", want, names)
@@ -515,7 +515,8 @@ type sweepUnit struct{ key, src, tgt string }
 func newSweep(t *testing.T, units []sweepUnit) (*mcp.ClientSession, *httptest.Server, *store.Project, map[string]int64) {
 	t.Helper()
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "t.db"))
+	dbPath := filepath.Join(t.TempDir(), "t.db")
+	st, err := store.Open(ctx, dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -540,7 +541,9 @@ func newSweep(t *testing.T, units []sweepUnit) (*mcp.ClientSession, *httptest.Se
 		t.Fatal(err)
 	}
 	bm, _ := backup.NewManager(st, config.Backup{}, slog.New(slog.DiscardHandler))
-	ts := httptest.NewServer(New(ctx, st, config.Default(), nil, bm, nil, slog.New(slog.DiscardHandler)).Handler())
+	cfg := config.Default()
+	cfg.DB = dbPath // exports go next to the database
+	ts := httptest.NewServer(New(ctx, st, cfg, nil, bm, nil, slog.New(slog.DiscardHandler)).Handler())
 	t.Cleanup(ts.Close)
 	c := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil)
 	cs, err := c.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: ts.URL + "/mcp"}, nil)
@@ -924,7 +927,6 @@ func TestMCPReplaceErrors(t *testing.T) {
 		"no pairs":      func(a map[string]any) { a["pairs"] = []any{} },
 		"51 pairs":      func(a map[string]any) { a["pairs"] = many },
 		"empty find":    func(a map[string]any) { a["pairs"] = []any{pair("", "X")} },
-		"no query":      func(a map[string]any) { a["pairs"] = []any{pair("Рыпер", "X"), pair("Сеткавы", "Y")} },
 		"no project":    func(a map[string]any) { a["project"] = 9999 },
 	}
 	for name, mod := range cases {
