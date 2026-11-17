@@ -340,8 +340,24 @@ the pieces are recovered with `model.SplitTarget`:
   - Each change goes through `s.save` (origin `ai`, `IfBelow: Approved`, state
     kept). A replacement that breaks the codes is refused for that unit only
     (checked in a dry run too); approved units are counted as `skipped`.
-  - Result: `{dryRun, matched, changed, skipped, failed, samples (10, cut to
-    ~300 runes around the change), failures (50), next}`.
+  - Result: `{dryRun, matched, changed, skipped, failed, approvedMatches,
+    pairs, samples (10, cut to ~300 runes around the change), matches,
+    failures (50), sweepId, next}`.
+  - `preserveCase` (`matchCase`): the replacement takes the case of each match
+    (ALL CAPS, Capitalised, lower; mixed case is inserted as written).
+  - `full` adds `matches`, every matched unit as `{id, before, after,
+    approved}` (at most `limit` units). `approvedMatches` counts matches inside
+    approved units. `pairs` is per pair `{find, units, occurrences,
+    alreadyHave}`: `alreadyHave` is set only for a non-regex pair that matched
+    nothing, and counts the units in scope that already contain its
+    replacement ("already done" vs "typo in find").
+  - A real run saves under one history batch `sweep-<unix>-<hex>` and returns it
+    as `sweepId`. **`revert_sweep`** (`api/mcp_revert.go`, also a dry run by
+    default) restores `old_target` (via `store.BatchChanges`, which scans the
+    project's history rows for the batch) for each unit that still holds exactly
+    the text the sweep wrote; units edited again or approved since are
+    `skipped`. Only `sweep-` ids are accepted; the revert is itself saved with
+    origin `ai` under a `revert-` batch and is not revertible.
 - **Reference texts in lists**: `list_units` takes `langs` (e.g. `["uk","en"]`)
   and adds `refs {lang: text}` (cut to `PreviewRunes`, `refsTruncated`) to each
   row via `store.UnitLangsFor`, one `unit_langs` PK query per page that leaves

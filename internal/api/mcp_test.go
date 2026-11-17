@@ -74,7 +74,7 @@ func TestMCPToolList(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	for _, want := range []string{"list_projects", "get_tree", "list_units", "count_units", "get_unit",
-		"get_unit_tm", "get_unit_langs", "machine_translate", "save_translation", "save_translations", "replace_in_targets", "propagate_translation",
+		"get_unit_tm", "get_unit_langs", "machine_translate", "save_translation", "save_translations", "replace_in_targets", "revert_sweep", "propagate_translation",
 		"list_terms", "term_forms", "create_term", "update_term", "delete_term", "recheck_qa", "list_jobs", "get_job"} {
 		if !slices.Contains(names, want) {
 			t.Errorf("missing tool %s (have %v)", want, names)

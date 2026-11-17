@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -289,4 +290,44 @@ func changeWindow(old, new string) (o, n string, head, tail bool) {
 
 func escapeLike(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
+// BatchChange is what one batch did to one unit: the text before and after.
+type BatchChange struct {
+	UnitID int64
+	Old    *string // nil: the unit had no translation
+	New    *string
+}
+
+// BatchChanges returns the changes of one history batch in a project, in
+// the order they were made. A unit changed twice in the batch appears twice.
+func (s *Store) BatchChanges(ctx context.Context, projectID int64, batch string) ([]BatchChange, error) {
+	// NewBatch ids carry the start time and rows are written after it, which
+	// lets history_proj (project_id, at) skip everything older.
+	var since int64
+	if parts := strings.Split(batch, "-"); len(parts) == 3 {
+		since, _ = strconv.ParseInt(parts[1], 10, 64)
+	}
+	rows, err := s.R.QueryContext(ctx, `SELECT unit_id, old_target, target FROM history
+		WHERE project_id = ? AND at >= ? AND batch = ? AND old_state IS NOT NULL ORDER BY id`, projectID, since, batch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BatchChange
+	for rows.Next() {
+		var c BatchChange
+		var o, n sql.NullString
+		if err := rows.Scan(&c.UnitID, &o, &n); err != nil {
+			return nil, err
+		}
+		if o.Valid {
+			c.Old = &o.String
+		}
+		if n.Valid {
+			c.New = &n.String
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }

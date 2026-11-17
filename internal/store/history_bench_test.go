@@ -63,3 +63,21 @@ func BenchmarkHistoryList(b *testing.B) {
 		}
 	}
 }
+
+// BatchChanges has no index on batch: it scans the project's history rows.
+// This is what a revert_sweep costs on the real corpus (the newest batch,
+// as a revert is usually of a recent sweep).
+func BenchmarkBatchChanges(b *testing.B) {
+	st, pid := benchStore(b)
+	ctx := context.Background()
+	var batch string
+	if err := st.R.QueryRow(`SELECT batch FROM history WHERE project_id = ? AND batch IS NOT NULL GROUP BY batch ORDER BY max(at) DESC LIMIT 1`, pid).Scan(&batch); err != nil {
+		b.Skip("no batch in the history")
+	}
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := st.BatchChanges(ctx, pid, batch); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
