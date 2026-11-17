@@ -119,6 +119,48 @@ func TestMCPListWords(t *testing.T) {
 	}
 }
 
+// skipNumbers and script cut the junk out of a typo hunt: 00012 and 2024 are
+// words to the counter, but never candidates, and a Latin look-alike inside a
+// Cyrillic word is exactly what "mixed" finds.
+func TestMCPListWordsScript(t *testing.T) {
+	cs, _, p, _ := newSweep(t, []sweepUnit{
+		{"s1", "a", "Ганна 00012 hello 2024 Gаnna 3d 1990-я"}, // Gаnna: Latin G and n around a Cyrillic а
+		{"s2", "b", "Ганна 00012 world"},
+	})
+	got := func(args map[string]any) []string {
+		var ws []string
+		for _, w := range words(t, cs, p.ID, args).Words {
+			ws = append(ws, w.Word)
+		}
+		slices.Sort(ws)
+		return ws
+	}
+	for name, c := range map[string]struct {
+		args map[string]any
+		want []string
+	}{
+		"all":                     {map[string]any{}, []string{"00012", "1990-я", "2024", "3d", "gаnna", "ганна", "hello", "world"}},
+		"skipNumbers":             {map[string]any{"skipNumbers": true}, []string{"1990-я", "3d", "gаnna", "ганна", "hello", "world"}},
+		"cyrillic":                {map[string]any{"script": "cyrillic"}, []string{"1990-я", "gаnna", "ганна"}},
+		"noCyrillic":              {map[string]any{"script": "noCyrillic"}, []string{"00012", "2024", "3d", "hello", "world"}},
+		"mixed":                   {map[string]any{"script": "mixed"}, []string{"gаnna"}},
+		"no cyrillic, no numbers": {map[string]any{"script": "noCyrillic", "skipNumbers": true}, []string{"3d", "hello", "world"}},
+		"with maxCount":           {map[string]any{"skipNumbers": true, "script": "cyrillic", "maxCount": 1}, []string{"1990-я", "gаnna"}},
+	} {
+		slices.Sort(c.want)
+		if g := got(c.args); !slices.Equal(g, c.want) {
+			t.Errorf("%s: %v, want %v", name, g, c.want)
+		}
+	}
+	// total counts what is left after the filters, before paging.
+	if out := words(t, cs, p.ID, map[string]any{"skipNumbers": true, "limit": 2}); out.Total != 6 || len(out.Words) != 2 {
+		t.Errorf("total = %d, words = %d", out.Total, len(out.Words))
+	}
+	if text, isErr := call(t, cs, "list_words", map[string]any{"project": p.ID, "script": "greek"}, nil); !isErr {
+		t.Errorf("bad script accepted: %s", text)
+	}
+}
+
 func TestParseSince(t *testing.T) {
 	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
 	for in, want := range map[string]int64{

@@ -373,7 +373,10 @@ the pieces are recovered with `model.SplitTarget`:
 - **`list_words`** (`api/mcp_words.go`, `store.ScanTexts`): distinct words of the
   filtered targets (or sources) with counts, from the text pieces only (codes
   never count). A word is letters, digits and marks, with a single apostrophe or
-  hyphen between two of them; case folded unless `caseSensitive`; ranked by
+  hyphen between two of them; case folded unless `caseSensitive`; `skipNumbers`
+  drops words with no letter (00012) and `script` keeps `cyrillic`, `noCyrillic`
+  or `mixed` (Cyrillic plus another script's letter, a Latin look-alike) words,
+  applied before counting so `total` and `maxCount` see only what is left; ranked by
   count then alphabet (or `alpha`), `minCount`/`maxCount`, `limit` (max 2000)
   and `offset` (recomputed per call). About 0.8 s for all 183k targets.
 - **`export_units`** (`api/mcp_export.go`, `store.ExportUnits`) writes the filtered
