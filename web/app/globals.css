@@ -177,7 +177,8 @@ button.bl-chip:hover { border-color: var(--chip-fg); }
 .bl-editor .cm-editor { font-size: 0.95rem; }
 .bl-editor .cm-editor.cm-focused { outline: none; }
 .bl-editor .cm-content { font-family: var(--font-sans); padding: 0.5rem 0; caret-color: var(--foreground); }
-.bl-editor .cm-line { padding: 0 0.75rem; }
+/* 1rem = the panel's px-4, so the translation starts under the source text. */
+.bl-editor .cm-line { padding: 0 1rem; }
 .bl-editor .cm-scroller { line-height: 1.6; }
 .bl-editor .cm-selectionBackground, .bl-editor .cm-focused .cm-selectionBackground { background: color-mix(in oklch, var(--primary) 22%, transparent) !important; }
 .bl-editor .cm-cursor { border-left-color: var(--foreground); }

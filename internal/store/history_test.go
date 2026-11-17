@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Thrapis/bellingua/internal/importer"
@@ -145,5 +146,63 @@ func TestHistoryFeed(t *testing.T) {
 	st.R.QueryRow(`SELECT count(*) FROM history`).Scan(&n)
 	if n != 0 {
 		t.Errorf("%d history rows left", n)
+	}
+}
+
+// A change deep inside a long text must reach the feed: the row carries a
+// window around the change (Head/Tail mark what was left out), not the first
+// PreviewRunes, where both versions would look the same.
+func TestHistoryListWindowsLongTexts(t *testing.T) {
+	ctx := context.Background()
+	st, p, runner, _ := histFixture(t)
+	tr := func(s string) *string { return &s }
+	u2 := unitID(t, st, p.ID, "2")
+
+	words := make([]string, 400) // 400 five-letter words: 2399 runes
+	for i := range words {
+		words[i] = fmt.Sprintf("с%04d", i)
+	}
+	before := strings.Join(words, " ")
+	words[300] = "ЗМЕНА"
+	after := strings.Join(words, " ")
+	for _, text := range []string{before, after} {
+		if _, err := st.SaveUnit(ctx, u2, store.Save{Target: tr(text), State: model.Translated, Origin: "ai"}, runner); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rows, _, err := st.HistoryList(ctx, store.HistoryFilter{ProjectID: p.ID, Origins: []string{"ai"}}, nil, 10)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("rows = %+v %v", rows, err)
+	}
+	// Newest first: rows[0] is before -> after.
+	r := rows[0]
+	if r.Old == nil || r.New == nil || !r.Head || !r.Tail {
+		t.Fatalf("changed row = %+v", r)
+	}
+	if !strings.Contains(*r.New, "ЗМЕНА") || !strings.Contains(*r.Old, "с0300") {
+		t.Errorf("window misses the change: old=%q new=%q", *r.Old, *r.New)
+	}
+	if n := len([]rune(*r.New)); n > store.PreviewRunes {
+		t.Errorf("window is %d runes, over PreviewRunes", n)
+	}
+	// Outside the changed word both windows are the same text, so the UI diff marks only the change.
+	if strings.Replace(*r.New, "ЗМЕНА", "с0300", 1) != *r.Old {
+		t.Errorf("windows differ beyond the change:\nold=%q\nnew=%q", *r.Old, *r.New)
+	}
+
+	// A first translation has nothing to compare with: the head of the text, cut.
+	first := rows[1]
+	if first.Old != nil || first.New == nil || first.Head || !first.Tail || !strings.HasPrefix(before, *first.New) || len([]rune(*first.New)) != store.PreviewRunes {
+		t.Errorf("first row = %+v", first)
+	}
+
+	// A long text replaced by a short one: nothing in common, so both start at the top.
+	if _, err := st.SaveUnit(ctx, u2, store.Save{Target: tr("Не"), State: model.Translated, Origin: "edit"}, runner); err != nil {
+		t.Fatal(err)
+	}
+	rows, _, _ = st.HistoryList(ctx, store.HistoryFilter{ProjectID: p.ID, Origins: []string{"edit"}}, nil, 10)
+	if len(rows) != 1 || *rows[0].New != "Не" || rows[0].Head || !rows[0].Tail || !strings.HasPrefix(after, *rows[0].Old) || len([]rune(*rows[0].Old)) != store.PreviewRunes {
+		t.Errorf("short row = %+v", rows)
 	}
 }

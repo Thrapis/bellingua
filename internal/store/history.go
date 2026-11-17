@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -153,8 +154,13 @@ type HistoryRow struct {
 	Batch    string      `json:"batch,omitempty"`
 	OldState model.State `json:"oldState"`
 	State    model.State `json:"state"`
-	Old      *string     `json:"old"` // previews, cut to PreviewRunes
-	New      *string     `json:"new"`
+	// Old and New are previews of at most PreviewRunes. When both exist and
+	// differ they are the same window around the change, so the difference
+	// is visible however long the text is.
+	Old  *string `json:"old"`
+	New  *string `json:"new"`
+	Head bool    `json:"head,omitempty"` // an unchanged beginning was left out
+	Tail bool    `json:"tail,omitempty"` // text after the preview was left out
 }
 
 // HistoryList pages the feed newest first with a keyset cursor (at, id).
@@ -197,7 +203,7 @@ func (s *Store) HistoryList(ctx context.Context, f HistoryFilter, after *Cursor,
 	}
 	args = append(args, limit+1)
 	rows, err := s.R.QueryContext(ctx, `SELECT h.id, h.unit_id, u.file_id, f.path, u.key, h.origin, h.at, COALESCE(h.batch, ''),
-			h.old_state, h.state, substr(h.old_target, 1, `+fmt.Sprint(PreviewRunes)+`), substr(h.target, 1, `+fmt.Sprint(PreviewRunes)+`)
+			h.old_state, h.state, h.old_target, h.target
 		FROM history h JOIN units u ON u.id = h.unit_id JOIN files f ON f.id = u.file_id
 		WHERE `+b.String()+` ORDER BY h.at DESC, h.id DESC LIMIT ?`, args...)
 	if err != nil {
@@ -212,10 +218,15 @@ func (s *Store) HistoryList(ctx context.Context, f HistoryFilter, after *Cursor,
 			&r.OldState, &r.State, &o, &n); err != nil {
 			return nil, nil, err
 		}
-		if o.Valid {
+		switch {
+		case o.Valid && n.Valid:
+			o.String, n.String, r.Head, r.Tail = changeWindow(o.String, n.String)
+			r.Old, r.New = &o.String, &n.String
+		case o.Valid:
+			o.String, _, _, r.Tail = changeWindow(o.String, o.String)
 			r.Old = &o.String
-		}
-		if n.Valid {
+		case n.Valid:
+			n.String, _, _, r.Tail = changeWindow(n.String, n.String)
 			r.New = &n.String
 		}
 		out = append(out, r)
@@ -231,6 +242,92 @@ func (s *Store) HistoryList(ctx context.Context, f HistoryFilter, after *Cursor,
 	return out, next, nil
 }
 
+// windowContext is how many unchanged runes a change window keeps on each side.
+const windowContext = 40
+
+// changeWindow cuts two versions of a text to previews of at most
+// PreviewRunes that show where they differ: both start windowContext runes
+// before the first difference (head reports a skipped beginning) and end
+// windowContext runes after the last one, or at the limit (tail reports
+// skipped text). Equal texts are cut from the top.
+func changeWindow(old, new string) (o, n string, head, tail bool) {
+	if len(old) <= PreviewRunes && len(new) <= PreviewRunes {
+		return old, new, false, false // bytes >= runes: nothing to cut
+	}
+	a, b := []rune(old), []rune(new)
+	if len(a) <= PreviewRunes && len(b) <= PreviewRunes {
+		return old, new, false, false
+	}
+	pre := 0
+	for pre < len(a) && pre < len(b) && a[pre] == b[pre] {
+		pre++
+	}
+	if pre == len(a) && pre == len(b) {
+		return string(a[:PreviewRunes]), string(b[:PreviewRunes]), false, true
+	}
+	suf := 0
+	for suf < len(a)-pre && suf < len(b)-pre && a[len(a)-1-suf] == b[len(b)-1-suf] {
+		suf++
+	}
+	start := pre - windowContext
+	if start <= windowContext {
+		start = 0 // not worth an ellipsis
+	}
+	endA, endB := len(a)-suf, len(b)-suf
+	if limit := start + PreviewRunes; endA > limit || endB > limit {
+		// The change itself is longer than a preview: cut it, without the
+		// trailing context one side would lack.
+		endA, endB = min(endA, limit), min(endB, limit)
+	} else {
+		keep := min(suf, windowContext, limit-endA, limit-endB)
+		if suf-keep <= windowContext {
+			keep = min(suf, limit-endA, limit-endB)
+		}
+		endA, endB = endA+keep, endB+keep
+	}
+	return string(a[start:endA]), string(b[start:endB]), start > 0, endA < len(a) || endB < len(b)
+}
+
 func escapeLike(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
+// BatchChange is what one batch did to one unit: the text before and after.
+type BatchChange struct {
+	UnitID int64
+	Old    *string // nil: the unit had no translation
+	New    *string
+}
+
+// BatchChanges returns the changes of one history batch in a project, in
+// the order they were made. A unit changed twice in the batch appears twice.
+func (s *Store) BatchChanges(ctx context.Context, projectID int64, batch string) ([]BatchChange, error) {
+	// NewBatch ids carry the start time and rows are written after it, which
+	// lets history_proj (project_id, at) skip everything older.
+	var since int64
+	if parts := strings.Split(batch, "-"); len(parts) == 3 {
+		since, _ = strconv.ParseInt(parts[1], 10, 64)
+	}
+	rows, err := s.R.QueryContext(ctx, `SELECT unit_id, old_target, target FROM history
+		WHERE project_id = ? AND at >= ? AND batch = ? AND old_state IS NOT NULL ORDER BY id`, projectID, since, batch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BatchChange
+	for rows.Next() {
+		var c BatchChange
+		var o, n sql.NullString
+		if err := rows.Scan(&c.UnitID, &o, &n); err != nil {
+			return nil, err
+		}
+		if o.Valid {
+			c.Old = &o.String
+		}
+		if n.Valid {
+			c.New = &n.String
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }

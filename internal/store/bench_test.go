@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/Thrapis/bellingua/internal/model"
 	"github.com/Thrapis/bellingua/internal/qa"
@@ -163,6 +164,74 @@ func BenchmarkUnitLangsFor(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		if _, err := st.UnitLangsFor(ctx, ids, []string{"uk", "en"}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// Regex with a literal: the trigram index narrows, the pattern verifies.
+func BenchmarkRegexLiteral(b *testing.B) {
+	benchList(b, Filter{Query: `Орбит\p{L}*\b`, In: "source", Regex: true}, nil)
+}
+
+// Regex with no literal of 3+ characters: the pattern runs on every unit
+// until 200 match (a common ending, so the scan stops early).
+func BenchmarkRegexNoLiteral(b *testing.B) {
+	benchList(b, Filter{Query: `ў\b`, In: "target", Regex: true}, nil)
+}
+
+// Worst case: a rare pattern without a literal scans every unit.
+func BenchmarkRegexNoLiteralRare(b *testing.B) {
+	benchList(b, Filter{Query: `ъ\b`, In: "source", Regex: true}, nil)
+}
+
+func BenchmarkRegexCount(b *testing.B) {
+	st, pid := benchStore(b)
+	ctx := context.Background()
+	for b.Loop() {
+		if _, err := st.Count(ctx, Filter{ProjectID: pid, Query: `ў\b`, In: "target", Regex: true}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// A name in the source, its agreed form missing from the translation.
+func BenchmarkNotQuery(b *testing.B) {
+	benchList(b, Filter{Query: "Орбита", In: "source", NotQuery: "Арбіта", NotIn: "target"}, nil)
+}
+
+// NotQuery alone: everything except the matches, first 200.
+func BenchmarkNotQueryAlone(b *testing.B) {
+	benchList(b, Filter{NotQuery: "что", NotIn: "target"}, nil)
+}
+
+// Units changed lately: units_updated serves the bound, the rest is cheap.
+func BenchmarkListUpdatedSince(b *testing.B) {
+	benchList(b, Filter{UpdatedSince: time.Now().Add(-24 * 365 * time.Hour).Unix()}, nil)
+}
+
+// "What the agent changed last": a history lookup per unit until 200 match.
+func BenchmarkListLastOriginAI(b *testing.B) { benchList(b, Filter{LastOrigin: "ai"}, nil) }
+
+// Worst case: an origin few units have, so the lookup runs on every unit.
+func BenchmarkListLastOriginRare(b *testing.B) { benchList(b, Filter{LastOrigin: "tm"}, nil) }
+
+func BenchmarkCountLastOriginAI(b *testing.B) {
+	st, pid := benchStore(b)
+	ctx := context.Background()
+	for b.Loop() {
+		if _, err := st.Count(ctx, Filter{ProjectID: pid, LastOrigin: "ai"}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// ScanTexts over the whole project: what list_words reads.
+func BenchmarkScanTexts(b *testing.B) {
+	st, pid := benchStore(b)
+	ctx := context.Background()
+	for b.Loop() {
+		if _, err := st.ScanTexts(ctx, Filter{ProjectID: pid}, true, func(string) {}); err != nil {
 			b.Fatal(err)
 		}
 	}

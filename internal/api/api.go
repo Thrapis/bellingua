@@ -270,7 +270,11 @@ func (s *Server) runner(ctx context.Context, p *store.Project) (*qa.Runner, *glo
 func filter(p *store.Project, r *http.Request) (store.Filter, error) {
 	q := r.URL.Query()
 	f := store.Filter{ProjectID: p.ID, Dir: q.Get("dir"), Query: q.Get("q"), In: q.Get("in"),
+		Regex: q.Get("regex") == "1", NotQuery: q.Get("nq"), NotIn: q.Get("nin"),
 		Changed: q.Get("changed") == "1", Errors: q.Get("errors") == "1"}
+	if err := f.Validate(); err != nil {
+		return f, badRequest("%v", err)
+	}
 	if v := q.Get("same"); v != "" {
 		id, err := strconv.ParseInt(v, 10, 64)
 		if err != nil {

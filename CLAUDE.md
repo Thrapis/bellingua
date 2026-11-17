@@ -106,6 +106,20 @@ The global rules (`~/.claude/CLAUDE.md`) apply. This project adds:
   FTS5 table because `unit_langs` has no rowid; no triggers: `LangWriter.Finish`,
   `DeleteProjectLang` and `DeleteProject` maintain it, and the backup strips
   and rebuilds it like `units_fts`). Under 3 characters it falls back to `instr`.
+- **Regex and NOT** (`Filter.Regex`, `NotQuery`, `NotIn`; MCP `regex`/`notQuery`/`notIn`,
+  HTTP `regex=1`/`nq`/`nin`): with `Regex` both queries are patterns of
+  `internal/rx`, Go RE2 whose ``, `\B`, `\w`, `\W` follow Unicode (Go's are ASCII-only) and
+  count an apostrophe between letters as part of the word. RE2 has no look-around, so each ``
+  becomes an empty group whose position is checked after the match (`rx.go` explains the limit).
+  Matching runs in SQL through the `rx(pattern, text)` function (`store/rxfunc.go`, compiled
+  patterns cached). A pattern with a literal of 3+ characters that every match contains
+  (`Regexp.Literal`) is first narrowed through `units_fts`; one without scans every unit the
+  rest of the filter leaves (about 200 ms for a rare pattern on 180k units, the benchmarks
+  `BenchmarkRegex*`). `NotQuery` is `AND NOT coalesce(<same condition>, 0)` through the same
+  `match` builder, so a unit with no translation "does not contain" anything. A broken pattern is
+  `Filter.Validate`'s error (400). `Count` skips the `files` counters when `NotQuery` is set.
+  `replace_in_targets` with `regex` uses the same package: `find` is a pattern, `replace` a
+  template (`$1`, `${name}`); empty matches are ignored.
 - **Orders** (`store.Sort`): besides file order, `updated`/`old`
   (`units_updated`), `short`/`long` (`units_len`), `tshort`/`tlong`
   (`units_tlen`, partial on `target IS NOT NULL`, so untranslated units are left
@@ -326,8 +340,51 @@ the pieces are recovered with `model.SplitTarget`:
   - Each change goes through `s.save` (origin `ai`, `IfBelow: Approved`, state
     kept). A replacement that breaks the codes is refused for that unit only
     (checked in a dry run too); approved units are counted as `skipped`.
-  - Result: `{dryRun, matched, changed, skipped, failed, samples (10, cut to
-    ~300 runes around the change), failures (50), next}`.
+  - Result: `{dryRun, matched, changed, skipped, failed, approvedMatches,
+    pairs, samples (10, cut to ~300 runes around the change), matches,
+    failures (50), sweepId, next}`.
+  - `preserveCase` (`matchCase`): the replacement takes the case of each match
+    (ALL CAPS, Capitalised, lower; mixed case is inserted as written).
+  - `full` adds `matches`, every matched unit as `{id, before, after,
+    approved}` (at most `limit` units). `approvedMatches` counts matches inside
+    approved units. `pairs` is per pair `{find, units, occurrences,
+    alreadyHave}`: `alreadyHave` is set only for a non-regex pair that matched
+    nothing, and counts the units in scope that already contain its
+    replacement ("already done" vs "typo in find").
+  - A real run saves under one history batch `sweep-<unix>-<hex>` and returns it
+    as `sweepId`. **`revert_sweep`** (`api/mcp_revert.go`, also a dry run by
+    default) restores `old_target` (via `store.BatchChanges`, which scans the
+    project's history rows for the batch) for each unit that still holds exactly
+    the text the sweep wrote; units edited again or approved since are
+    `skipped`. Only `sweep-` ids are accepted; the revert is itself saved with
+    origin `ai` under a `revert-` batch and is not revertible.
+- **Several pairs without a query**: the candidates are the units whose target
+  matches the alternation of all find texts (quoted unless `regex`, `(?i:...)`
+  with `ignoreCase`), so the SQL `rx()` function does the scan (a dry run of two
+  pairs over 180k units: about 130 ms); a plain `notQuery` is quoted along.
+  `warnings` tells when a plain find with a literal backslash-`n`/`r`/`t`
+  matched nothing (that is two characters, not a line break).
+- **Finding what changed**: `Filter.UpdatedSince` (`modifiedSince`: `90m`,
+  `48h`, a date, RFC 3339 or unix seconds) and `Filter.LastOrigin` (`lastOrigin`:
+  `ai|edit|mt|tm|bulk|import`, the origin of the unit's latest history entry,
+  looked up per unit through `history_unit`) are on every tool that takes the
+  filter; both keep `Count` off the `files` counters. A rare origin scans every
+  unit (about 300 ms on 180k).
+- **`list_words`** (`api/mcp_words.go`, `store.ScanTexts`): distinct words of the
+  filtered targets (or sources) with counts, from the text pieces only (codes
+  never count). A word is letters, digits and marks, with a single apostrophe or
+  hyphen between two of them; case folded unless `caseSensitive`; ranked by
+  count then alphabet (or `alpha`), `minCount`/`maxCount`, `limit` (max 2000)
+  and `offset` (recomputed per call). About 0.8 s for all 183k targets.
+- **`export_units`** (`api/mcp_export.go`, `store.ExportUnits`) writes the filtered
+  units, whole texts with codes inline, to a TSV (`id state updated path key
+  source target`; backslash, tab and line breaks are escaped as two-character
+  sequences: backslash-backslash, backslash-t, backslash-n, backslash-r).
+  The agent gives a file *name* only (`[A-Za-z0-9._-]`, `.tsv` or `.txt`, no
+  Windows device names); the file is written under `exports/` next to the
+  database through a temp file and a rename, replacing the same name. About
+  0.5 s and 55 MB for the whole corpus. `list_units` `full=true` gives whole
+  texts for a page (at most 50 rows).
 - **Reference texts in lists**: `list_units` takes `langs` (e.g. `["uk","en"]`)
   and adds `refs {lang: text}` (cut to `PreviewRunes`, `refsTruncated`) to each
   row via `store.UnitLangsFor`, one `unit_langs` PK query per page that leaves

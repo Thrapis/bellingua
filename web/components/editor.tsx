@@ -30,7 +30,7 @@ import { useConfirm } from "@/components/confirm";
 const PAGE = 200;
 
 /** URL parameters restored from the last session (the file/folder scope is not). */
-const REMEMBERED = ["q", "in", "state", "qa", "changed", "sort"] as const;
+const REMEMBERED = ["q", "in", "regex", "nq", "nin", "state", "qa", "changed", "sort"] as const;
 const filtersKey = (pid: number) => `bellingua:filters:${pid}`;
 
 function loadFilters(pid: number): Record<string, string> {
@@ -85,6 +85,9 @@ export function Editor() {
       dir: sp.get("dir") ?? undefined,
       q: sp.get("q") ?? undefined,
       in: sp.get("in") ?? undefined,
+      regex: sp.get("regex") === "1",
+      nq: sp.get("nq") ?? undefined,
+      nin: sp.get("nin") ?? undefined,
       states: (sp.get("state")?.split(",").filter(Boolean) as State[]) ?? undefined,
       qa: sp.get("qa") ?? undefined,
       changed: sp.get("changed") === "1",
@@ -266,6 +269,9 @@ export function Editor() {
           unit: String(id),
           q: undefined,
           in: undefined,
+          regex: undefined,
+          nq: undefined,
+          nin: undefined,
           state: undefined,
           qa: undefined,
           changed: undefined,

@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Thrapis/bellingua/internal/model"
+	"github.com/Thrapis/bellingua/internal/rx"
 	"github.com/Thrapis/bellingua/internal/store"
 )
 
@@ -28,24 +29,38 @@ const (
 )
 
 type replacePair struct {
-	Find    string `json:"find" jsonschema:"the text to find (plain string, not a pattern)"`
-	Replace string `json:"replace" jsonschema:"what to put instead; may be empty"`
+	Find    string `json:"find" jsonschema:"the text to find: a plain string, or with regex=true a pattern (see regex). In a plain string a backslash followed by n is those two characters; for a line break send a real line break, or use regex=true where \\n is one"`
+	Replace string `json:"replace" jsonschema:"what to put instead; may be empty. With regex=true it is a template: $1 or ${name} is a group of the match, $$ a dollar sign"`
 }
 
 type replaceIn struct {
 	filterIn
-	Pairs      []replacePair `json:"pairs" jsonschema:"1-50 find/replace pairs, applied in order to each target"`
-	IgnoreCase bool          `json:"ignoreCase,omitempty" jsonschema:"match regardless of letter case (default: case-sensitive); the replacement is inserted as given"`
-	WholeWord  bool          `json:"wholeWord,omitempty" jsonschema:"only match whole words: the neighbours must not be letters, digits or an apostrophe inside a word"`
-	DryRun     *bool         `json:"dryRun,omitempty" jsonschema:"default true: report what would change and write nothing; pass false to write"`
-	Limit      int           `json:"limit,omitempty" jsonschema:"most matching units handled per call, 1-2000 (default 500)"`
-	Cursor     string        `json:"cursor,omitempty" jsonschema:"the next value of the previous call"`
+	Pairs        []replacePair `json:"pairs" jsonschema:"1-50 find/replace pairs, applied in order to each target"`
+	IgnoreCase   bool          `json:"ignoreCase,omitempty" jsonschema:"match regardless of letter case (default: case-sensitive); the replacement is inserted as given"`
+	PreserveCase bool          `json:"preserveCase,omitempty" jsonschema:"give each replacement the letter case of the text it replaces: ALL CAPITALS stay capitals, a Capitalised word stays capitalised, lower stays lower, mixed case is inserted as written (use with ignoreCase)"`
+	Full         bool          `json:"full,omitempty" jsonschema:"also return every matched unit as matches [{id, before, after, approved}] (texts cut to about 300 characters around the change), not just ten samples; at most limit units"`
+	WholeWord    bool          `json:"wholeWord,omitempty" jsonschema:"only match whole words: the neighbours must not be letters, digits or an apostrophe inside a word"`
+	DryRun       *bool         `json:"dryRun,omitempty" jsonschema:"default true: report what would change and write nothing; pass false to write"`
+	Limit        int           `json:"limit,omitempty" jsonschema:"most matching units handled per call, 1-2000 (default 500)"`
+	Cursor       string        `json:"cursor,omitempty" jsonschema:"the next value of the previous call"`
 }
 
 type mcpSweepSample struct {
-	ID     int64  `json:"id"`
-	Before string `json:"before"`
-	After  string `json:"after"`
+	ID       int64  `json:"id"`
+	Before   string `json:"before"`
+	After    string `json:"after"`
+	Approved bool   `json:"approved,omitempty"` // the unit is approved, so it is never changed
+}
+
+// mcpSweepPair says what one pair found, so a result of 0 can be told apart.
+type mcpSweepPair struct {
+	Find        string `json:"find"`
+	Units       int    `json:"units"`       // units where this pair matched
+	Occurrences int    `json:"occurrences"` // matches in those units
+	// AlreadyHave is set when the pair matched nothing: how many units (in
+	// the same scope) already contain the replacement text. Many means the
+	// sweep was probably done before; none means look for a typo in find.
+	AlreadyHave int `json:"alreadyHave,omitempty"`
 }
 
 type mcpSweepFailure struct {
@@ -54,95 +69,129 @@ type mcpSweepFailure struct {
 }
 
 type mcpSweep struct {
-	DryRun   bool              `json:"dryRun"`
-	Matched  int               `json:"matched"` // units where some pair matches
-	Changed  int               `json:"changed"` // saved (or, in a dry run, would be)
-	Skipped  int               `json:"skipped"` // matched but approved
-	Failed   int               `json:"failed"`
-	Samples  []mcpSweepSample  `json:"samples"`
-	Failures []mcpSweepFailure `json:"failures"`
-	Next     string            `json:"next,omitempty"` // cursor when the limit stopped the sweep
+	DryRun  bool `json:"dryRun"`
+	Matched int  `json:"matched"` // units where some pair matches
+	Changed int  `json:"changed"` // saved (or, in a dry run, would be)
+	Skipped int  `json:"skipped"` // matched but approved
+	Failed  int  `json:"failed"`
+	// ApprovedMatches counts the matched units that are approved (and so left
+	// alone); they are in matched and skipped too.
+	ApprovedMatches int               `json:"approvedMatches"`
+	Pairs           []mcpSweepPair    `json:"pairs"`
+	Samples         []mcpSweepSample  `json:"samples"`
+	Matches         []mcpSweepSample  `json:"matches,omitempty"` // every matched unit, with full=true
+	Failures        []mcpSweepFailure `json:"failures"`
+	Warnings        []string          `json:"warnings,omitempty"` // things worth a second look in the request
+	SweepID         string            `json:"sweepId,omitempty"`  // a real run's handle for revert_sweep
+	Next            string            `json:"next,omitempty"`     // cursor when the limit stopped the sweep
 }
 
 // replacer applies one pair.
 type replacer struct {
-	re                   *regexp.Regexp
-	repl                 string
-	whole                bool
-	checkStart, checkEnd bool // the find text starts/ends with a word character
+	find     string
+	re       *rx.Regexp
+	repl     string
+	template bool // repl is a template with $1 groups (regex mode)
+	whole    bool
+	keepCase bool
+	// units and occurrences count what the pair found over a whole sweep.
+	units, occurrences int
 }
 
-func newReplacer(p replacePair, ignoreCase, whole bool) (*replacer, error) {
+func newReplacer(p replacePair, in replaceIn) (*replacer, error) {
 	if p.Find == "" {
 		return nil, badRequest("find must not be empty")
 	}
-	expr := regexp.QuoteMeta(p.Find)
-	if ignoreCase {
+	expr := p.Find
+	if !in.Regex {
+		expr = regexp.QuoteMeta(expr)
+	}
+	if in.IgnoreCase {
 		expr = "(?i)" + expr
 	}
-	re, err := regexp.Compile(expr)
+	re, err := rx.Compile(expr)
 	if err != nil {
-		return nil, badRequest("bad find %q", p.Find)
+		return nil, badRequest("bad pattern %q: %v", p.Find, err)
 	}
-	first, _ := utf8.DecodeRuneInString(p.Find)
-	last, _ := utf8.DecodeLastRuneInString(p.Find)
-	return &replacer{re: re, repl: p.Replace, whole: whole, checkStart: isWordRune(first), checkEnd: isWordRune(last)}, nil
+	return &replacer{find: p.Find, re: re, repl: p.Replace, template: in.Regex, whole: in.WholeWord, keepCase: in.PreserveCase}, nil
 }
 
-func isWordRune(r rune) bool {
-	return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsMark(r)
-}
-
-func isApostrophe(r rune) bool { return r == '\'' || r == '’' || r == 'ʼ' }
-
-// joinsWord reports whether the rune just before (or after) a match belongs
-// to a word, counting an apostrophe between two letters as part of it.
-func joinsWord(s string, i int, before bool) bool {
-	var r rune
-	var size int
-	if before {
-		r, size = utf8.DecodeLastRuneInString(s[:i])
-	} else {
-		r, size = utf8.DecodeRuneInString(s[i:])
-	}
-	if size == 0 {
-		return false
-	}
-	if isWordRune(r) {
-		return true
-	}
-	if !isApostrophe(r) {
-		return false
-	}
-	var n rune
-	if before {
-		n, _ = utf8.DecodeLastRuneInString(s[:i-size])
-	} else {
-		n, _ = utf8.DecodeRuneInString(s[i+size:])
-	}
-	return n != utf8.RuneError && isWordRune(n)
-}
-
-func (r *replacer) apply(s string) string {
-	locs := r.re.FindAllStringIndex(s, -1)
-	if locs == nil {
-		return s
-	}
-	var b strings.Builder
-	last := 0
-	for _, loc := range locs {
-		if r.whole && ((r.checkStart && joinsWord(s, loc[0], true)) || (r.checkEnd && joinsWord(s, loc[1], false))) {
-			continue
+// matchCase gives repl the letter case of match: all capitals (two or more
+// letters) -> all capitals; a capital first letter followed by lower case, a
+// single capital, or a capital first letter with mixed case after it -> first
+// letter capital; all lower case -> all lower case. Anything else (a lower
+// case start with capitals inside, no letters) leaves repl as written.
+func matchCase(match, repl string) string {
+	letters, upper, lower := 0, 0, 0
+	firstUpper := false
+	for _, r := range match {
+		switch {
+		case unicode.IsUpper(r):
+			if letters == 0 {
+				firstUpper = true
+			}
+			letters++
+			upper++
+		case unicode.IsLower(r):
+			letters++
+			lower++
 		}
-		b.WriteString(s[last:loc[0]])
-		b.WriteString(r.repl)
-		last = loc[1]
 	}
-	if last == 0 && b.Len() == 0 {
+	switch {
+	case letters == 0:
+		return repl
+	case upper == letters && letters >= 2:
+		return strings.ToUpper(repl)
+	case firstUpper:
+		return capitalize(repl)
+	case lower == letters:
+		return strings.ToLower(repl)
+	}
+	return repl
+}
+
+func capitalize(s string) string {
+	r, n := utf8.DecodeRuneInString(s)
+	if n == 0 {
 		return s
 	}
-	b.WriteString(s[last:])
-	return b.String()
+	return string(unicode.ToUpper(r)) + s[n:]
+}
+
+// apply replaces the matches in s and counts them in r.
+func (r *replacer) apply(s string) string {
+	var out []byte
+	last, n := 0, 0
+	for _, m := range r.re.FindAllStringSubmatchIndex(s) {
+		if m[0] == m[1] {
+			continue // a pattern like x* matches nothing between any two letters
+		}
+		if r.whole {
+			// An end of the match that is a word character must not continue into a word.
+			first, _ := utf8.DecodeRuneInString(s[m[0]:])
+			end, _ := utf8.DecodeLastRuneInString(s[:m[1]])
+			if (rx.IsWordRune(first) && rx.JoinsWord(s, m[0], true)) || (rx.IsWordRune(end) && rx.JoinsWord(s, m[1], false)) {
+				continue
+			}
+		}
+		out = append(out, s[last:m[0]]...)
+		repl := r.repl
+		if r.template {
+			repl = string(r.re.Expand(nil, r.repl, s, m))
+		}
+		if r.keepCase {
+			repl = matchCase(s[m[0]:m[1]], repl)
+		}
+		out = append(out, repl...)
+		last = m[1]
+		n++
+	}
+	if n == 0 {
+		return s
+	}
+	r.units++
+	r.occurrences += n
+	return string(append(out, s[last:]...))
 }
 
 // cutAround shortens a before/after pair to about sampleRunes runes around
@@ -172,13 +221,13 @@ func cutAround(before, after string) (string, string) {
 }
 
 func (s *Server) replaceInTargets(ctx context.Context, in replaceIn) (mcpSweep, error) {
-	out := mcpSweep{DryRun: in.DryRun == nil || *in.DryRun, Samples: []mcpSweepSample{}, Failures: []mcpSweepFailure{}}
+	out := mcpSweep{DryRun: in.DryRun == nil || *in.DryRun, Pairs: []mcpSweepPair{}, Samples: []mcpSweepSample{}, Failures: []mcpSweepFailure{}}
 	if n := len(in.Pairs); n == 0 || n > maxReplacePairs {
 		return out, badRequest("pairs must hold 1-%d entries, not %d", maxReplacePairs, n)
 	}
 	reps := make([]*replacer, len(in.Pairs))
 	for i, p := range in.Pairs {
-		r, err := newReplacer(p, in.IgnoreCase, in.WholeWord)
+		r, err := newReplacer(p, in)
 		if err != nil {
 			return out, err
 		}
@@ -191,14 +240,15 @@ func (s *Server) replaceInTargets(ctx context.Context, in replaceIn) (mcpSweep, 
 		in.States = []string{"mt", "translated"}
 	}
 	// Candidates are found by searching the targets for the find text. With
-	// several pairs one query can't cover them all, so the caller must give a
-	// query or narrow the units by folder or file.
+	// one pair that text is the query; with several and no query of the
+	// caller's, any of the find texts will do (an alternation, below).
+	multi := in.Query == "" && len(in.Pairs) > 1
 	if in.Query == "" {
-		if len(in.Pairs) > 1 && in.Dir == "" && in.File == 0 {
-			return out, badRequest("with several pairs give a query, dir or file to choose the units to scan")
-		}
 		if len(in.Pairs) == 1 {
 			in.Query, in.In = in.Pairs[0].Find, "target"
+			if in.Regex && in.IgnoreCase {
+				in.Query = "(?i)" + in.Query
+			}
 		}
 	}
 	if in.In == "" {
@@ -207,6 +257,31 @@ func (s *Server) replaceInTargets(ctx context.Context, in replaceIn) (mcpSweep, 
 	f, err := in.filter()
 	if err != nil {
 		return out, err
+	}
+	if multi {
+		// The pairs' find texts as one pattern: the units holding any of them.
+		// Plain finds are quoted, and a plain notQuery stays plain (and keeps
+		// the case rules of a substring search) now that the filter is a pattern.
+		alts := make([]string, len(in.Pairs))
+		for i, p := range in.Pairs {
+			alts[i] = "(?:" + p.Find + ")"
+			if !in.Regex {
+				alts[i] = "(?:" + regexp.QuoteMeta(p.Find) + ")"
+			}
+		}
+		f.Query, f.In, f.Regex = strings.Join(alts, "|"), "target", true
+		if in.IgnoreCase {
+			f.Query = "(?i:" + f.Query + ")"
+		}
+		if !in.Regex && f.NotQuery != "" {
+			f.NotQuery = regexp.QuoteMeta(f.NotQuery)
+			if utf8.RuneCountInString(in.NotQuery) >= 3 {
+				f.NotQuery = "(?i)" + f.NotQuery
+			}
+		}
+		if err := f.Validate(); err != nil {
+			return out, badRequest("%v", err)
+		}
 	}
 	after, err := parseCursor(in.Cursor)
 	if err != nil {
@@ -218,6 +293,10 @@ func (s *Server) replaceInTargets(ctx context.Context, in replaceIn) (mcpSweep, 
 	}
 	limit = min(limit, maxReplaceCap)
 
+	batch := ""
+	if !out.DryRun {
+		batch = store.NewBatch("sweep")
+	}
 	budget := limit
 	for budget > 0 {
 		// A page never holds more rows than the budget, so a page that spends
@@ -250,7 +329,12 @@ func (s *Server) replaceInTargets(ctx context.Context, in replaceIn) (mcpSweep, 
 			}
 			out.Matched++
 			budget--
+			if in.Full {
+				b, a := cutAround(cur, repl)
+				out.Matches = append(out.Matches, mcpSweepSample{ID: r.ID, Before: b, After: a, Approved: r.State >= model.Approved})
+			}
 			if r.State >= model.Approved {
+				out.ApprovedMatches++
 				out.Skipped++
 				continue
 			}
@@ -258,7 +342,7 @@ func (s *Server) replaceInTargets(ctx context.Context, in replaceIn) (mcpSweep, 
 			if _, err := model.SplitTarget(repl, src); err != nil {
 				saveErr = err
 			} else if !out.DryRun {
-				_, saveErr = s.save(ctx, r.ID, store.Save{Target: &repl, State: r.State, Origin: mcpOrigin, IfBelow: model.Approved})
+				_, saveErr = s.save(ctx, r.ID, store.Save{Target: &repl, State: r.State, Origin: mcpOrigin, IfBelow: model.Approved, Batch: batch})
 			}
 			switch {
 			case errors.Is(saveErr, store.ErrSkipped):
@@ -283,6 +367,32 @@ func (s *Server) replaceInTargets(ctx context.Context, in replaceIn) (mcpSweep, 
 	}
 	if budget == 0 && after != nil {
 		out.Next = fmt.Sprintf("%d.%d", after.A, after.B)
+	}
+	for _, rp := range reps {
+		pr := mcpSweepPair{Find: rp.find, Units: rp.units, Occurrences: rp.occurrences}
+		if rp.occurrences == 0 && !in.Regex && rp.repl != "" {
+			// Tell "already done" from "wrong find text": how many units in
+			// the same scope hold the replacement.
+			hf := f
+			hf.Query, hf.In, hf.Regex = rp.repl, "target", false
+			if n, err := s.st.Count(ctx, hf); err == nil {
+				pr.AlreadyHave = int(n)
+			}
+		}
+		out.Pairs = append(out.Pairs, pr)
+	}
+	if !out.DryRun && out.Changed > 0 {
+		out.SweepID = batch
+	}
+	for _, rp := range reps {
+		if rp.occurrences == 0 && !in.Regex {
+			for _, esc := range []string{"\\n", "\\r", "\\t"} {
+				if strings.Contains(rp.find, esc) {
+					out.Warnings = append(out.Warnings, fmt.Sprintf("find %q contains a backslash followed by %q, which matches those two characters, not a line break or tab; put a real line break (tab) in find, or use regex=true, where %s is one", rp.find, esc[1:], esc))
+					break
+				}
+			}
+		}
 	}
 	return out, nil
 }
