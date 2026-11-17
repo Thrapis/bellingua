@@ -25,6 +25,8 @@ type wordsIn struct {
 	MinCount      int    `json:"minCount,omitempty" jsonschema:"only words occurring at least this often (default 1)"`
 	MaxCount      int    `json:"maxCount,omitempty" jsonschema:"only words occurring at most this often; maxCount 1 lists the words that occur once, where typos hide"`
 	CaseSensitive bool   `json:"caseSensitive,omitempty" jsonschema:"count Ганна and ганна apart (default: folded to lower case)"`
+	SkipNumbers   bool   `json:"skipNumbers,omitempty" jsonschema:"leave out words with no letter in them (00012, 2024); 3d and 1990-я stay"`
+	Script        string `json:"script,omitempty" jsonschema:"keep only words by script: cyrillic (has a Cyrillic letter), noCyrillic (has none, numbers included unless skipNumbers), mixed (Cyrillic plus another script's letter, e.g. a Latin look-alike inside a Belarusian word); default all"`
 	Sort          string `json:"sort,omitempty" jsonschema:"count (default: most frequent first, ties alphabetical) or alpha"`
 	Limit         int    `json:"limit,omitempty" jsonschema:"words per call, 1-2000 (default 200)"`
 	Offset        int    `json:"offset,omitempty" jsonschema:"words to skip, to read the next page (the list is recomputed on every call)"`
@@ -51,6 +53,11 @@ func (s *Server) listWords(ctx context.Context, in wordsIn) (mcpWords, error) {
 	default:
 		return out, badRequest("field must be target or source, not %q", in.Field)
 	}
+	switch in.Script {
+	case "", "cyrillic", "noCyrillic", "mixed":
+	default:
+		return out, badRequest("script must be cyrillic, noCyrillic or mixed, not %q", in.Script)
+	}
 	switch in.Sort {
 	case "", "count", "alpha":
 	default:
@@ -76,6 +83,9 @@ func (s *Server) listWords(ctx context.Context, in wordsIn) (mcpWords, error) {
 	counts := map[string]int{}
 	n, err := s.st.ScanTexts(ctx, f, target, func(text string) {
 		eachWord(text, func(w string) {
+			if !wordKept(w, in.SkipNumbers, in.Script) {
+				return
+			}
 			if !in.CaseSensitive {
 				w = strings.ToLower(w)
 			}
@@ -107,6 +117,38 @@ func (s *Server) listWords(ctx context.Context, in wordsIn) (mcpWords, error) {
 		out.Words = all[in.Offset:min(in.Offset+limit, len(all))]
 	}
 	return out, nil
+}
+
+// wordKept applies list_words' skipNumbers and script options to one word.
+func wordKept(w string, skipNumbers bool, script string) bool {
+	if !skipNumbers && script == "" {
+		return true
+	}
+	var letters, cyrillic bool
+	var other bool // a letter of another script
+	for _, r := range w {
+		if !unicode.IsLetter(r) {
+			continue
+		}
+		letters = true
+		if unicode.Is(unicode.Cyrillic, r) {
+			cyrillic = true
+		} else {
+			other = true
+		}
+	}
+	if skipNumbers && !letters {
+		return false
+	}
+	switch script {
+	case "cyrillic":
+		return cyrillic
+	case "noCyrillic":
+		return !cyrillic
+	case "mixed":
+		return cyrillic && other
+	}
+	return true
 }
 
 // eachWord calls fn for every word of s: a run of letters, digits and marks,
