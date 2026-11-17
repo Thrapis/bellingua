@@ -1,0 +1,11 @@
+# LF everywhere, whatever core.autocrlf says: gofmt, Next and editors write LF,
+# and a CRLF checkout then shows unchanged files as modified.
+* text=auto eol=lf
+*.bat   text eol=crlf
+*.png   binary
+*.ico   binary
+*.syso  binary
+# Translation files must round-trip byte for byte.
+*.xlf   -text
+*.xliff -text
+testdata/** -text

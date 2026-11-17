@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import {
+  ArrowDownToLine,
   Check,
   CheckCheck,
   CircleAlert,
@@ -252,6 +253,9 @@ export function UnitPanel({ unitId, row, draft, onDraft, actions, mtEnabled, mtS
               <BookMarked />
             </IconButton>
             <IconButton label="Copy source to translation (Ctrl+Shift+C)" onClick={() => src && apply(plain(src))}>
+              <ArrowDownToLine />
+            </IconButton>
+            <IconButton label="Copy source to clipboard" onClick={() => src && copyText(plain(src))}>
               <Copy />
             </IconButton>
           </div>

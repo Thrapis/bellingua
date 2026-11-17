@@ -87,8 +87,13 @@ export type HistoryRow = {
   batch?: string;
   oldState: State;
   state: State;
+  /** Previews. When both exist and differ they are one window around the change. */
   old: string | null;
   new: string | null;
+  /** An unchanged beginning was left out. */
+  head?: boolean;
+  /** Text after the preview was left out. */
+  tail?: boolean;
 };
 export type HistoryQuery = { from?: number; to?: number; origin?: string; batch?: string; state?: State };
 

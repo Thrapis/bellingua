@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
 import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, History as HistoryIcon } from "lucide-react";
 import { api, type HistoryBatch, type HistoryDay, type HistoryOrigin, type HistoryRow } from "@/lib/api";
+import { diffWords } from "@/lib/diff";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { StateDot, stateLabel } from "@/components/pieces";
@@ -221,11 +222,50 @@ function Entry({ pid, row }: { pid: number; row: HistoryRow }) {
         </div>
       </div>
       <div className="min-w-0 space-y-0.5">
-        {row.old !== row.new && row.old !== null && (
-          <div className="line-clamp-2 break-words text-muted-foreground line-through decoration-muted-foreground/40">{row.old}</div>
+        {row.new === null ? (
+          <>
+            {row.old !== null && (
+              <div className="line-clamp-4 break-words">
+                <del className={DIFF.removed}>{row.old}</del>
+                {row.tail && ELLIPSIS}
+              </div>
+            )}
+            <div className="italic text-muted-foreground">cleared</div>
+          </>
+        ) : (
+          <div className="line-clamp-4 break-words">
+            {row.head && ELLIPSIS}
+            <Changes old={row.old ?? ""} text={row.new} />
+            {row.tail && ELLIPSIS}
+          </div>
         )}
-        <div className="line-clamp-2 break-words">{row.new ?? <span className="italic text-muted-foreground">cleared</span>}</div>
       </div>
     </Link>
   );
+}
+
+const ELLIPSIS = <span className="text-muted-foreground">…</span>;
+
+/** Tones of a change: green is new text, orange replaced text, red deleted text. */
+const DIFF = {
+  added: "rounded-sm bg-emerald-500/20 text-emerald-800 no-underline dark:text-emerald-200",
+  replaced: "rounded-sm bg-orange-500/25 text-orange-800 dark:text-orange-200",
+  removed: "rounded-sm bg-red-500/15 text-red-700 line-through decoration-red-500/60 dark:text-red-300",
+};
+
+/** The new version of a text with what changed against the old one marked. */
+function Changes({ old, text }: { old: string; text: string }) {
+  if (old === text) return text;
+  return diffWords(old, text).map((s, i) => {
+    switch (s.kind) {
+      case "added":
+        return <ins key={i} className={DIFF.added}>{s.text}</ins>;
+      case "removed":
+        return <del key={i} className={DIFF.removed}>{s.text}</del>;
+      case "replaced":
+        return <mark key={i} className={DIFF.replaced} title={`was: ${s.old}`}>{s.text}</mark>;
+      default:
+        return s.text;
+    }
+  });
 }
