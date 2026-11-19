@@ -103,6 +103,7 @@ func (s *Server) Handler() http.Handler {
 	h("PUT /api/settings", s.putSettings)
 	h("GET /api/projects", s.listProjects)
 	h("POST /api/projects", s.createProject)
+	h("PUT /api/projects/order", s.orderProjects)
 	h("GET /api/projects/{pid}", s.getProject)
 	h("DELETE /api/projects/{pid}", s.deleteProject)
 	h("GET /api/projects/{pid}/words", s.wordCounts)
@@ -366,6 +367,28 @@ func (s *Server) info(w http.ResponseWriter, r *http.Request) error {
 func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) error {
 	if etag(w, r, s.st.Rev()) {
 		return nil
+	}
+	ps, err := s.st.Projects(r.Context())
+	if err != nil {
+		return err
+	}
+	return ok(w, ps)
+}
+
+// orderProjects sets the order of projects on the home page: the listed ids
+// come first in that order, the others follow.
+func (s *Server) orderProjects(w http.ResponseWriter, r *http.Request) error {
+	var body struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := decode(r, &body); err != nil {
+		return err
+	}
+	if err := s.st.SetProjectOrder(r.Context(), body.IDs); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return badRequest("ids must be distinct ids of existing projects")
+		}
+		return err
 	}
 	ps, err := s.st.Projects(r.Context())
 	if err != nil {

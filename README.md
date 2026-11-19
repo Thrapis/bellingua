@@ -161,6 +161,11 @@ Copy `bellingua.example.yaml` to `bellingua.yaml` (read from the working
 directory, or pass `-config`). It sets the DB path, the listen address, the MT
 providers and the backup targets. Every command also accepts `-db`.
 
+### Project order
+
+Drag a project card by its grip (or use Move up / Move down in its menu) to put the
+projects in the order you like; it is remembered. New projects go last.
+
 ### Settings in the app
 
 The gear on the home page opens **Settings**: the backup targets, interval and

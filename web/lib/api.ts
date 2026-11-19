@@ -328,6 +328,7 @@ export const api = {
   words: (id: number) => request<Words>("GET", `/projects/${id}/words`),
   createProject: (b: { name: string; sourceLang: string; targetLang: string }) =>
     request<Project>("POST", "/projects", b),
+  orderProjects: (ids: number[]) => request<Project[]>("PUT", "/projects/order", { ids }),
   deleteProject: (id: number) => request<void>("DELETE", `/projects/${id}`),
   saveSettings: (id: number, settings: Project["settings"]) =>
     request<Project>("PUT", `/projects/${id}/settings`, settings),

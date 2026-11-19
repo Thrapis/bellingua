@@ -125,6 +125,10 @@ The global rules (`~/.claude/CLAUDE.md`) apply. This project adds:
   (`units_tlen`, partial on `target IS NOT NULL`, so untranslated units are left
   out) and `status` (`units_status`: state, then file order; its cursor packs
   `file_id<<32|ord`). `TestListOrdersUseIndexes` checks each plan.
+- **Project order**: `projects.position` (migration 11, backfilled in name order). `Store.Projects` sorts
+  by `position, name`; `CreateProject` appends at `max+1`; `SetProjectOrder` (`PUT /api/projects/order`,
+  `{ids}`) puts the listed ids first and keeps the rest after them, refusing unknown or repeated ids.
+  The home page drags with native HTML5 drag and drop from a handle (no library) and has Move up/down.
 - **List rows** carry previews cut to `PreviewRunes`; full texts come from
   `GET /api/units/{id}`.
 
