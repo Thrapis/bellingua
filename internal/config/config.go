@@ -21,6 +21,17 @@ type Config struct {
 	MT        MT        `yaml:"mt"`
 	Lingvanex Lingvanex `yaml:"lingvanex"`
 	Backup    Backup    `yaml:"backup"`
+	Crowdin   Crowdin   `yaml:"crowdin"`
+}
+
+// CrowdinTokenEnv names the environment variable used when Crowdin.Token is empty.
+const CrowdinTokenEnv = "BELLINGUA_CROWDIN_TOKEN"
+
+// Crowdin holds the credentials for pulling Crowdin projects. Read-only scopes
+// are enough (README). The token is never stored in the database.
+type Crowdin struct {
+	Token   string `yaml:"token"`   // personal access token; else $BELLINGUA_CROWDIN_TOKEN
+	BaseURL string `yaml:"baseUrl"` // API root; default https://api.crowdin.com/api/v2 (Enterprise: set organization per link instead)
 }
 
 // Lingvanex configures the local translation server that bellingua starts
@@ -59,6 +70,7 @@ type Provider struct {
 type Backup struct {
 	Interval time.Duration `yaml:"interval"` // automatic snapshot period when there were edits; 0 = off
 	Keep     int           `yaml:"keep"`     // snapshots to retain per target
+	Projects []string      `yaml:"projects"` // names of the projects to back up; empty = all
 	Dir      string        `yaml:"dir"`      // local (or mounted) directory target
 	SFTP     *SFTP         `yaml:"sftp"`     // remote target over SSH
 	Data     *DataServer   `yaml:"data"`     // go-data-server over HTTP(S)
@@ -123,6 +135,7 @@ func Load(path string, optional bool) (Config, error) {
 	c := Default()
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) && optional {
+		c.Crowdin.Token = os.Getenv(CrowdinTokenEnv)
 		return c, nil
 	}
 	if err != nil {
@@ -142,6 +155,9 @@ func Load(path string, optional bool) (Config, error) {
 	}
 	if len(c.Lingvanex.Command) == 0 {
 		c.Lingvanex.Command = defaultPython()
+	}
+	if c.Crowdin.Token == "" {
+		c.Crowdin.Token = os.Getenv(CrowdinTokenEnv)
 	}
 	if c.Backup.Keep <= 0 {
 		c.Backup.Keep = 20

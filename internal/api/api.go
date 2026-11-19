@@ -30,13 +30,15 @@ import (
 
 // Server holds the dependencies of the handlers.
 type Server struct {
-	st     *store.Store
-	cfg    config.Config
-	mt     mt.Chain
-	backup *backup.Manager
-	jobs   *Jobs
-	log    *slog.Logger
-	static fs.FS // the exported Next.js app; nil disables the UI
+	st      *store.Store
+	cfgMu   sync.RWMutex // guards cfg's backup and crowdin parts and cfgPath, which the settings page changes
+	cfg     config.Config
+	cfgPath string // the file the settings page edits
+	mt      mt.Chain
+	backup  *backup.Manager
+	jobs    *Jobs
+	log     *slog.Logger
+	static  fs.FS // the exported Next.js app; nil disables the UI
 
 	mtStatus func() mtserver.Status // nil when no local MT server is supervised
 
@@ -97,8 +99,11 @@ func (s *Server) Handler() http.Handler {
 		})
 	}
 	h("GET /api/info", s.info)
+	h("GET /api/settings", s.getSettings)
+	h("PUT /api/settings", s.putSettings)
 	h("GET /api/projects", s.listProjects)
 	h("POST /api/projects", s.createProject)
+	h("PUT /api/projects/order", s.orderProjects)
 	h("GET /api/projects/{pid}", s.getProject)
 	h("DELETE /api/projects/{pid}", s.deleteProject)
 	h("GET /api/projects/{pid}/words", s.wordCounts)
@@ -113,6 +118,26 @@ func (s *Server) Handler() http.Handler {
 	h("POST /api/projects/{pid}/qa", s.qaJob)
 	h("POST /api/projects/{pid}/mt", s.mtJob)
 	h("POST /api/projects/{pid}/import", s.importJob)
+	h("GET /api/projects/{pid}/crowdin", s.getCrowdin)
+	h("PUT /api/projects/{pid}/crowdin", s.putCrowdin)
+	h("POST /api/projects/{pid}/crowdin/pull", s.pullCrowdin)
+	h("POST /api/crowdin/projects", s.crowdinProjects)
+	// Read-only lookups for the crowdin-helper browser extension, with CORS for
+	// extension origins (and their preflights) only.
+	for pattern, fn := range map[string]func(w http.ResponseWriter, r *http.Request) error{
+		"/api/crowdin/lookup":      s.crowdinLookup,
+		"/api/crowdin/lookup.json": s.crowdinLookupAll,
+	} {
+		get := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if err := fn(w, r); err != nil {
+				s.fail(w, r, err)
+			}
+		})
+		mux.Handle("GET "+pattern, extensionCORS(get))
+		mux.Handle("OPTIONS "+pattern, extensionCORS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			writeError(w, http.StatusNotFound, "no such endpoint", nil) // a preflight from a page, not an extension
+		})))
+	}
 	h("GET /api/projects/{pid}/langs", s.listLangs)
 	h("POST /api/projects/{pid}/langs/import", s.importLangJob)
 	h("DELETE /api/projects/{pid}/langs/{lang}", s.deleteLang)
@@ -342,6 +367,28 @@ func (s *Server) info(w http.ResponseWriter, r *http.Request) error {
 func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) error {
 	if etag(w, r, s.st.Rev()) {
 		return nil
+	}
+	ps, err := s.st.Projects(r.Context())
+	if err != nil {
+		return err
+	}
+	return ok(w, ps)
+}
+
+// orderProjects sets the order of projects on the home page: the listed ids
+// come first in that order, the others follow.
+func (s *Server) orderProjects(w http.ResponseWriter, r *http.Request) error {
+	var body struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := decode(r, &body); err != nil {
+		return err
+	}
+	if err := s.st.SetProjectOrder(r.Context(), body.IDs); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return badRequest("ids must be distinct ids of existing projects")
+		}
+		return err
 	}
 	ps, err := s.st.Projects(r.Context())
 	if err != nil {

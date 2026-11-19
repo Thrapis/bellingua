@@ -6,14 +6,19 @@ import { useState } from "react";
 import { toast } from "sonner";
 import {
   BookMarked,
+  ChevronDown,
+  ChevronUp,
+  CloudDownload,
   CloudUpload,
   Download,
   EllipsisVertical,
   FolderInput,
+  GripVertical,
   History,
   Languages,
   Lock,
   Plus,
+  Settings,
   ShieldCheck,
   SlidersHorizontal,
   Trash2,
@@ -21,6 +26,7 @@ import {
 } from "lucide-react";
 import { api, type Counts, type Project } from "@/lib/api";
 import { langName } from "@/lib/lang";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -33,15 +39,39 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { CountsBar, donePct, Legend } from "@/components/pieces";
 import { BackupRow, RunningJobs, useJobs } from "@/components/jobs";
-import { ExportDialog, ImportDialog, NewProjectDialog, SettingsDialog } from "@/components/project-dialogs";
+import { CrowdinDialog, ExportDialog, ImportDialog, NewProjectDialog, SettingsDialog } from "@/components/project-dialogs";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useConfirm } from "@/components/confirm";
 
-type DialogKind = "import" | "export" | "settings";
+type DialogKind = "import" | "export" | "settings" | "crowdin";
 
 export default function Home() {
   const projects = useQuery({ queryKey: ["projects"], queryFn: api.projects });
   const [creating, setCreating] = useState(false);
+  const [copying, setCopying] = useState(false);
+  const qc = useQueryClient();
+  const [dragId, setDragId] = useState<number | null>(null);
+  const [over, setOver] = useState<{ id: number; before: boolean } | null>(null);
+  const reorder = useMutation({
+    mutationFn: api.orderProjects,
+    onSuccess: (list) => qc.setQueryData(["projects"], list),
+    onError: (e) => {
+      toast.error("Could not save the order: " + e.message);
+      qc.invalidateQueries({ queryKey: ["projects"] });
+    },
+  });
+  // Moves project id next to another one; shown at once, saved in the background.
+  const move = (id: number, target: number, before: boolean) => {
+    const list = projects.data;
+    if (!list || id === target) return;
+    const moving = list.find((p) => p.id === id);
+    if (!moving) return;
+    const rest = list.filter((p) => p.id !== id);
+    const at = rest.findIndex((p) => p.id === target) + (before ? 0 : 1);
+    const next = [...rest.slice(0, at), moving, ...rest.slice(at)];
+    qc.setQueryData(["projects"], next);
+    reorder.mutate(next.map((p) => p.id));
+  };
   const [dialog, setDialog] = useState<{ kind: DialogKind; project: Project } | null>(null);
 
   return (
@@ -50,10 +80,18 @@ export default function Home() {
         <Languages className="size-6" />
         <h1 className="text-xl font-semibold tracking-tight">bellingua</h1>
         <div className="flex-1" />
-        <ThemeToggle />
+        <Button variant="outline" onClick={() => setCopying(true)}>
+          <CloudDownload /> Copy from Crowdin
+        </Button>
         <Button onClick={() => setCreating(true)}>
           <Plus /> New project
         </Button>
+        <Button asChild variant="ghost" size="icon" aria-label="Settings" title="Settings">
+          <Link href="/settings">
+            <Settings />
+          </Link>
+        </Button>
+        <ThemeToggle />
       </header>
 
       <BackupCard />
@@ -70,8 +108,31 @@ export default function Home() {
         </div>
       ) : (
         <div className="grid gap-4">
-          {projects.data.map((p) => (
-            <ProjectCard key={p.id} project={p} onDialog={(kind) => setDialog({ kind, project: p })} />
+          {projects.data.map((p, i) => (
+            <ProjectCard
+              key={p.id}
+              project={p}
+              onDialog={(kind) => setDialog({ kind, project: p })}
+              dnd={{
+                dragging: dragId === p.id,
+                dropAt: over?.id === p.id ? (over.before ? "before" : "after") : null,
+                onDragStart: () => setDragId(p.id),
+                onDragEnd: () => {
+                  setDragId(null);
+                  setOver(null);
+                },
+                onDragOver: (before) => dragId !== null && dragId !== p.id && setOver({ id: p.id, before }),
+                onDrop: () => {
+                  if (dragId !== null && over) move(dragId, over.id, over.before);
+                  setDragId(null);
+                  setOver(null);
+                },
+                canUp: i > 0,
+                canDown: i < projects.data.length - 1,
+                onUp: () => move(p.id, projects.data[i - 1].id, true),
+                onDown: () => move(p.id, projects.data[i + 1].id, false),
+              }}
+            />
           ))}
           <Legend />
         </div>
@@ -82,6 +143,10 @@ export default function Home() {
         onOpenChange={setCreating}
         onCreated={(p) => setDialog({ kind: "import", project: p })}
       />
+      {copying && <CrowdinDialog open onOpenChange={(o) => !o && setCopying(false)} />}
+      {dialog?.kind === "crowdin" && (
+        <CrowdinDialog open onOpenChange={(o) => !o && setDialog(null)} project={dialog.project} />
+      )}
       {dialog?.kind === "import" && (
         <ImportDialog open onOpenChange={(o) => !o && setDialog(null)} project={dialog.project} />
       )}
@@ -95,7 +160,20 @@ export default function Home() {
   );
 }
 
-function ProjectCard({ project: p, onDialog }: { project: Project; onDialog: (k: DialogKind) => void }) {
+type CardDnd = {
+  dragging: boolean;
+  dropAt: "before" | "after" | null;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+  onDragOver: (before: boolean) => void;
+  onDrop: () => void;
+  canUp: boolean;
+  canDown: boolean;
+  onUp: () => void;
+  onDown: () => void;
+};
+
+function ProjectCard({ project: p, onDialog, dnd }: { project: Project; onDialog: (k: DialogKind) => void; dnd: CardDnd }) {
   const qc = useQueryClient();
   const c = p.counts;
   const qa = useMutation({ mutationFn: () => api.qaRecheck(p.id), onError: (e) => toast.error(e.message) });
@@ -129,8 +207,42 @@ function ProjectCard({ project: p, onDialog }: { project: Project; onDialog: (k:
     </div>
   );
   return (
-    <div className="rounded-xl border bg-card p-5">
+    <div
+      data-project-card
+      className={cn(
+        "rounded-xl border bg-card p-5 transition-opacity",
+        dnd.dragging && "opacity-40",
+        dnd.dropAt === "before" && "shadow-[0_-3px_0_0_var(--color-primary)]",
+        dnd.dropAt === "after" && "shadow-[0_3px_0_0_var(--color-primary)]",
+      )}
+      onDragOver={(e) => {
+        e.preventDefault(); // allow the drop
+        const r = e.currentTarget.getBoundingClientRect();
+        dnd.onDragOver(e.clientY < r.top + r.height / 2);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        dnd.onDrop();
+      }}
+    >
       <div className="flex items-start gap-3">
+        <button
+          type="button"
+          draggable
+          aria-label={"Drag to reorder " + p.name}
+          title="Drag to reorder"
+          className="-ml-2 mt-0.5 cursor-grab touch-none rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground active:cursor-grabbing"
+          onDragStart={(e) => {
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain", String(p.id));
+            const card = e.currentTarget.closest("[data-project-card]") ?? e.currentTarget;
+            e.dataTransfer.setDragImage(card, 24, 24);
+            dnd.onDragStart();
+          }}
+          onDragEnd={dnd.onDragEnd}
+        >
+          <GripVertical className="size-4" />
+        </button>
         <div className="flex-1">
           <Link href={`/editor?project=${p.id}`} className="text-lg font-semibold hover:underline">
             {p.name}
@@ -154,8 +266,22 @@ function ProjectCard({ project: p, onDialog }: { project: Project; onDialog: (k:
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            {(dnd.canUp || dnd.canDown) && (
+              <>
+                <DropdownMenuItem disabled={!dnd.canUp} onSelect={dnd.onUp}>
+                  <ChevronUp /> Move up
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled={!dnd.canDown} onSelect={dnd.onDown}>
+                  <ChevronDown /> Move down
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+              </>
+            )}
             <DropdownMenuItem onSelect={() => onDialog("import")}>
               <FolderInput /> Import…
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => onDialog("crowdin")}>
+              <CloudDownload /> Crowdin…
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => onDialog("export")}>
               <Download /> Export…
@@ -317,7 +443,11 @@ function BackupCard() {
           </>
         ) : (
           <p className="text-muted-foreground">
-            Backups are off. Set <code>backup.dir</code>, <code>backup.sftp</code> and/or <code>backup.data</code> in bellingua.yaml.
+            Backups are off.{" "}
+            <Link href="/settings" className="underline">
+              Choose where to back up
+            </Link>
+            .
           </p>
         )}
       </div>

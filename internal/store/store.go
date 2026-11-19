@@ -49,6 +49,12 @@ var schemaV7 string
 //go:embed schema_v8.sql
 var schemaV8 string
 
+//go:embed schema_v11.sql
+var schemaV11 string
+
+//go:embed schema_v10.sql
+var schemaV10 string
+
 //go:embed schema_v9.sql
 var schemaV9 string
 
@@ -75,6 +81,8 @@ var migrations = []migration{
 	{sql: schemaV7},
 	{sql: schemaV8, post: backfillWords},
 	{sql: schemaV9},
+	{sql: schemaV10},
+	{sql: schemaV11},
 }
 
 // backfillSourceHash fills units.source_hash for existing rows.

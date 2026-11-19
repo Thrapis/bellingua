@@ -106,7 +106,7 @@ func (s *Store) WordCounts(ctx context.Context, projectID int64) (Words, error) 
 // Projects lists all projects with their counters.
 func (s *Store) Projects(ctx context.Context) ([]*Project, error) {
 	rows, err := s.R.QueryContext(ctx, `SELECT `+projectCols+`
-		FROM projects p LEFT JOIN files f ON f.project_id = p.id GROUP BY p.id ORDER BY p.name`)
+		FROM projects p LEFT JOIN files f ON f.project_id = p.id GROUP BY p.id ORDER BY p.position, p.name`)
 	if err != nil {
 		return nil, err
 	}
@@ -150,8 +150,8 @@ func (s *Store) CreateProject(ctx context.Context, name, sourceLang, targetLang 
 	settings, _ := json.Marshal(Settings{QA: qa.DefaultConfig(targetLang)})
 	var id int64
 	err := s.Write(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `INSERT INTO projects (name, source_lang, target_lang, settings, created_at)
-			VALUES (?, ?, ?, ?, ?)`, name, sourceLang, targetLang, string(settings), time.Now().Unix())
+		res, err := tx.ExecContext(ctx, `INSERT INTO projects (name, source_lang, target_lang, settings, created_at, position)
+			VALUES (?, ?, ?, ?, ?, (SELECT coalesce(max(position) + 1, 0) FROM projects))`, name, sourceLang, targetLang, string(settings), time.Now().Unix())
 		if err != nil {
 			return err
 		}
@@ -162,6 +162,54 @@ func (s *Store) CreateProject(ctx context.Context, name, sourceLang, targetLang 
 		return nil, err
 	}
 	return s.Project(ctx, id)
+}
+
+// SetProjectOrder puts the listed projects first, in that order; the others
+// follow in the order they had. Unknown or repeated ids are refused and nothing changes.
+func (s *Store) SetProjectOrder(ctx context.Context, ids []int64) error {
+	return s.Write(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, "SELECT id FROM projects ORDER BY position, name")
+		if err != nil {
+			return err
+		}
+		var all []int64
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			all = append(all, id)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		known := map[int64]bool{}
+		for _, id := range all {
+			known[id] = true
+		}
+		listed := map[int64]bool{}
+		order := make([]int64, 0, len(all))
+		for _, id := range ids {
+			if !known[id] || listed[id] {
+				return ErrNotFound
+			}
+			listed[id] = true
+			order = append(order, id)
+		}
+		for _, id := range all {
+			if !listed[id] {
+				order = append(order, id)
+			}
+		}
+		for i, id := range order {
+			if _, err := tx.ExecContext(ctx, "UPDATE projects SET position = ? WHERE id = ?", i, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // SaveSettings replaces a project's settings.
@@ -184,24 +232,36 @@ func (s *Store) SaveSettings(ctx context.Context, id int64, st Settings) error {
 
 // DeleteProject removes a project and everything in it.
 func (s *Store) DeleteProject(ctx context.Context, id int64) error {
+	return s.DeleteProjects(ctx, id)
+}
+
+// DeleteProjects removes several projects and everything in them in one
+// transaction (one rebuild of the search index, not one per project).
+func (s *Store) DeleteProjects(ctx context.Context, ids ...int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
 	return s.Write(ctx, func(tx *sql.Tx) error {
 		if err := BeginBulk(ctx, tx); err != nil {
 			return err
 		}
-		for _, q := range []string{
-			"DELETE FROM history WHERE project_id = ?",
-			"DELETE FROM unit_langs_fts WHERE unit_id IN (SELECT id FROM units WHERE project_id = ?)",
-			"DELETE FROM unit_langs WHERE unit_id IN (SELECT id FROM units WHERE project_id = ?)",
-			"DELETE FROM project_langs WHERE project_id = ?",
-			"DELETE FROM units WHERE project_id = ?",
-			"DELETE FROM files WHERE project_id = ?",
-			"DELETE FROM projects WHERE id = ?",
-		} {
-			if _, err := tx.ExecContext(ctx, q, id); err != nil {
-				return err
+		for _, id := range ids {
+			for _, q := range []string{
+				"DELETE FROM history WHERE project_id = ?",
+				"DELETE FROM unit_langs_fts WHERE unit_id IN (SELECT id FROM units WHERE project_id = ?)",
+				"DELETE FROM unit_langs WHERE unit_id IN (SELECT id FROM units WHERE project_id = ?)",
+				"DELETE FROM project_langs WHERE project_id = ?",
+				"DELETE FROM project_links WHERE project_id = ?",
+				"DELETE FROM units WHERE project_id = ?",
+				"DELETE FROM files WHERE project_id = ?",
+				"DELETE FROM projects WHERE id = ?",
+			} {
+				if _, err := tx.ExecContext(ctx, q, id); err != nil {
+					return err
+				}
 			}
 		}
-		return EndBulk(ctx, tx, id)
+		return EndBulk(ctx, tx, ids[0])
 	})
 }
 

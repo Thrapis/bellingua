@@ -46,3 +46,8 @@ backup:
   #   folder: laptop                  # optional key prefix inside the app
   #   caFile: ~/.bellingua/ca.pem     # optional; only for a self-signed certificate
   #   timeout: 10m
+
+# Pulling projects from Crowdin (read-only). A personal access token with
+# read-only scopes; or set BELLINGUA_CROWDIN_TOKEN instead of writing it here.
+# crowdin:
+#   token: ""

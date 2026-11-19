@@ -86,6 +86,7 @@ func cmdServe(ctx context.Context, args []string) error {
 	}
 
 	srv := api.New(jobsCtx, st, e.cfg, chain, bm, ui.Dist(), e.log)
+	srv.SetConfigPath(e.path)
 	if mtsrv != nil {
 		srv.SetMTStatus(mtsrv.Status)
 	}
@@ -216,7 +217,7 @@ func cmdBackup(ctx context.Context, args []string) error {
 	if _, err := os.Stat(e.cfg.DB); err != nil {
 		return err
 	}
-	res, err := backup.Run(ctx, e.cfg.DB, targets, e.cfg.Backup.Keep)
+	res, err := backup.RunScoped(ctx, e.cfg.DB, targets, e.cfg.Backup.Keep, e.cfg.Backup.Projects, nil)
 	if err != nil {
 		return err
 	}
@@ -229,6 +230,7 @@ func cmdRestore(ctx context.Context, args []string) error {
 	load := commonFlags(fs)
 	from := fs.String("from", "latest", `snapshot name, or "latest"`)
 	target := fs.String("target", "", "target to restore from: dir | sftp | data (default: a remote one if configured)")
+	allowPartial := fs.Bool("allow-partial", false, "accept a snapshot that holds only some projects (replaces the whole database)")
 	fs.Parse(args)
 	e, err := load()
 	if err != nil {
@@ -262,7 +264,7 @@ func cmdRestore(ctx context.Context, args []string) error {
 	if t == nil {
 		return errors.New("no matching backup target configured")
 	}
-	if err := backup.Restore(ctx, t, *from, e.cfg.DB); err != nil {
+	if err := backup.RestoreScoped(ctx, t, *from, e.cfg.DB, *allowPartial); err != nil {
 		return err
 	}
 	e.log.Info("restored", "from", t.Name(), "snapshot", *from, "db", e.cfg.DB, "previous", e.cfg.DB+".bak")

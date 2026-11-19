@@ -182,7 +182,7 @@ export type Info = {
 
 export type Job = {
   id: string;
-  kind: "import" | "export" | "mt" | "qa" | "backup" | "tm";
+  kind: "import" | "export" | "mt" | "qa" | "backup" | "tm" | "crowdin-pull";
   project?: number;
   status: "running" | "done" | "failed" | "canceled";
   done: number;
@@ -278,6 +278,49 @@ export function filterParams(f: Filter): URLSearchParams {
   return p;
 }
 
+export type SftpSettings = { host: string; port: number; user: string; key: string; knownHosts: string; dir: string };
+export type DataSettings = { url: string; app: string; folder: string; caFile: string; timeout: string; tokenSet?: boolean };
+export type Settings = {
+  path: string;
+  general: { logLevel: string; listen: string; db: string };
+  backup: {
+    interval: string;
+    keep: number;
+    dir: string;
+    projects: string[]; // empty = every project
+    sftp: SftpSettings | null;
+    data: DataSettings | null;
+  };
+  crowdin: { baseUrl: string; tokenSet: boolean };
+  projects: string[];
+  restartRequired?: string[];
+};
+/** What PUT /settings takes: only the sections to change. An all-empty sftp or data turns that target off. */
+export type SettingsPatch = {
+  general?: { logLevel?: string };
+  backup?: {
+    interval?: string;
+    keep?: number;
+    dir?: string;
+    projects?: string[];
+    sftp?: SftpSettings;
+    data?: Omit<DataSettings, "tokenSet">;
+  };
+  crowdin?: { baseUrl?: string };
+};
+
+export type CrowdinLink = {
+  projectId: number;
+  remoteId: number;
+  identifier: string;
+  baseUrl?: string;
+  sourceLang: string;
+  targetLang: string;
+  lastPull: number; // unix seconds, 0 = never
+};
+export type CrowdinInfo = { tokenSet: boolean; link: CrowdinLink | null };
+export type CrowdinTarget = { remoteId: number; organization?: string; targetLang?: string };
+
 export const api = {
   info: () => request<Info>("GET", "/info"),
   projects: () => request<Project[]>("GET", "/projects"),
@@ -285,6 +328,7 @@ export const api = {
   words: (id: number) => request<Words>("GET", `/projects/${id}/words`),
   createProject: (b: { name: string; sourceLang: string; targetLang: string }) =>
     request<Project>("POST", "/projects", b),
+  orderProjects: (ids: number[]) => request<Project[]>("PUT", "/projects/order", { ids }),
   deleteProject: (id: number) => request<void>("DELETE", `/projects/${id}`),
   saveSettings: (id: number, settings: Project["settings"]) =>
     request<Project>("PUT", `/projects/${id}/settings`, settings),
@@ -321,6 +365,12 @@ export const api = {
   mtBatch: (id: number, f: Filter, v: { overwrite: boolean; glossary: boolean }) =>
     request<Job>("POST", `/projects/${id}/mt?${filterParams(f)}`, v),
   qaRecheck: (id: number) => request<Job>("POST", `/projects/${id}/qa`),
+  appSettings: () => request<Settings>("GET", "/settings"),
+  saveAppSettings: (b: SettingsPatch) => request<Settings>("PUT", "/settings", b),
+  crowdin: (id: number) => request<CrowdinInfo>("GET", `/projects/${id}/crowdin`),
+  linkCrowdin: (id: number, b: CrowdinTarget) => request<CrowdinLink>("PUT", `/projects/${id}/crowdin`, b),
+  pullCrowdin: (id: number) => request<Job>("POST", `/projects/${id}/crowdin/pull`),
+  copyCrowdin: (b: CrowdinTarget & { name?: string }) => request<Job>("POST", "/crowdin/projects", b),
   importDir: (id: number, b: { dir: string; format: string }) =>
     request<Job>("POST", `/projects/${id}/import`, b),
   exportDir: (id: number, b: { dir: string; format: string; minState: State }) =>

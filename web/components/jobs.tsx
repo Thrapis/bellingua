@@ -21,6 +21,7 @@ const kindLabel: Record<Job["kind"], string> = {
   qa: "QA recheck",
   backup: "Backup",
   tm: "Translation memory fill",
+  "crowdin-pull": "Crowdin pull",
 };
 
 function summary(j: Job): string {
@@ -38,6 +39,8 @@ function summary(j: Job): string {
       return `${r.changed ?? 0} units changed`;
     case "backup":
       return `${r.name ?? ""}`;
+    case "crowdin-pull":
+      return `${r.Units ?? 0} units · ${r.Inserted ?? 0} new · ${r.Updated ?? 0} updated · ${r.SourceChanged ?? 0} source changed · ${r.Obsolete ?? 0} obsolete${r.pluralSkipped ? ` · ${r.pluralSkipped} plural skipped` : ""}`;
     case "tm":
       return `${r.filled ?? 0} strings filled from 100% matches`;
   }
@@ -90,7 +93,9 @@ export function RunningJobs({ project, hide }: { project?: number; hide?: Job["k
             <span className="w-40 shrink-0 font-medium">{kindLabel[j.kind]}</span>
             <Progress value={pct} className="h-1.5 flex-1" />
             <span className="shrink-0 whitespace-nowrap text-right tabular-nums text-muted-foreground">
-              {j.total ? `${j.done.toLocaleString()} / ${j.total.toLocaleString()}` : (j.message ?? "…")}
+              {j.total
+                ? `${j.kind === "crowdin-pull" && j.message ? `${j.message} ` : ""}${j.done.toLocaleString()} / ${j.total.toLocaleString()}`
+                : (j.message ?? "…")}
             </span>
             <Button variant="ghost" size="icon" className="size-6" onClick={() => api.cancelJob(j.id)} title="Cancel">
               <X className="size-3.5" />

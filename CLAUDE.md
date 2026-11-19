@@ -125,6 +125,10 @@ The global rules (`~/.claude/CLAUDE.md`) apply. This project adds:
   (`units_tlen`, partial on `target IS NOT NULL`, so untranslated units are left
   out) and `status` (`units_status`: state, then file order; its cursor packs
   `file_id<<32|ord`). `TestListOrdersUseIndexes` checks each plan.
+- **Project order**: `projects.position` (migration 11, backfilled in name order). `Store.Projects` sorts
+  by `position, name`; `CreateProject` appends at `max+1`; `SetProjectOrder` (`PUT /api/projects/order`,
+  `{ids}`) puts the listed ids first and keeps the rest after them, refusing unknown or repeated ids.
+  The home page drags with native HTML5 drag and drop from a handle (no library) and has Move up/down.
 - **List rows** carry previews cut to `PreviewRunes`; full texts come from
   `GET /api/units/{id}`.
 
@@ -182,6 +186,23 @@ the pieces are recovered with `model.SplitTarget`:
 - Details are recomputed on demand (`Runner.Run`) and not stored.
 - Per-project config lives in `projects.settings`. The API caches one `Runner`
   per settings value.
+
+### Settings in the UI (`api/settings.go`, `config/patch.go`)
+
+- **Storage**: `bellingua.yaml` itself. `config.Patch` edits it through yaml.v3 nodes (comments, other
+  keys and their order stay), writes a temp file, loads it as validation and only then renames it over
+  the original; an invalid result leaves the file untouched. Dotted keys; nil/empty removes a key and
+  a parent left empty. `GET/PUT /api/settings` (`Server.SetConfigPath`, `Server.config()` under `cfgMu`).
+- **Live**: only the backup and Crowdin parts of the config are taken over by the running server
+  (`backup.Manager.Reconfigure`: swaps targets, Loop restarts its timer, refused with `ErrRunning`
+  during a backup). `logLevel` is saved but reported in `restartRequired`; listen and db are read-only.
+- **Secrets** (`crowdin.token`, `backup.data.token`) are never returned or written; the API reports
+  `tokenSet`. Turning the data or sftp target off removes its whole section, a token in it too.
+- **Backup project choice** (`backup.projects`, names): `snapshot` takes `only`; `keepProjects` runs on
+  the `VACUUM INTO` copy: `Store.DeleteProjects` (one transaction), meta `backup_partial` (kept names),
+  `VACUUM` so nothing of a left-out project stays in the file. `RestoreScoped` refuses a partial
+  snapshot (`PartialError`) unless allowed (`restore -allow-partial`), and then drops the marker.
+  The automatic trigger is still the global `Rev`: an edit in an unchosen project also starts a backup.
 
 ### Glossary (`internal/glossary`, `store/terms.go`, `api/terms.go`)
 
@@ -402,6 +423,26 @@ the pieces are recovered with `model.SplitTarget`:
   a client to a running serve's `/mcp`, mirrors its tools and forwards calls.
   It never opens the DB. It reports errors without `fail()`'s "Press Enter",
   which would read the client's stdin.
+
+### Crowdin link (`internal/crowdin`, `api/crowdin*.go`, `store/links.go`)
+
+- **Read-only client** (stdlib `net/http`, Crowdin API v2): project, files, strings,
+  translations and approvals of one target language, paged by 500, a 429 retried
+  with `Retry-After`. Plural strings are skipped and counted. Tests use an `httptest` fake.
+- **Token** only from `crowdin.token` / `$BELLINGUA_CROWDIN_TOKEN`, never in the DB or an
+  API answer. The request never names the host: crowdin.com, or
+  `{organization}.api.crowdin.com` (`crowdin.BaseForOrg`), or the config's `baseUrl`.
+- **Link**: `project_links` (migration 10: remote id, lower-case identifier, languages,
+  `last_pull`). A pull is the job `crowdin-pull`; `importer.ImportFiles` runs the same
+  `writeAll` as a tree import, so the merge rules above apply unchanged (human work is
+  kept). Files are stored as `crowdin-csv`; a unit's key is the Crowdin identifier,
+  `id:<stringId>` when empty, `<identifier>#<stringId>` when repeated. A Crowdin
+  translation is state translated, approved when it has an approval; Crowdin's
+  pre-translation flag is not looked at.
+- **Lookup for the crowdin-helper extension**: `GET /api/crowdin/lookup` (project
+  identifier + source text; exact via `ExactMatches`, then the `tm.Manager` fuzzy index)
+  and `/lookup.json` (every unit with a translation, ETag from `Rev` and `minState`).
+  `extensionCORS` answers `moz-extension://`/`chrome-extension://` origins only.
 
 ### Frontend (`web/`)
 

@@ -11,6 +11,7 @@ package backup
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -63,7 +64,7 @@ func Targets(cfg config.Backup) ([]Target, error) {
 // dbPath to w. The full-text index is about half the database and can be
 // rebuilt from the units, so it is emptied in the copy (Restore rebuilds it).
 func Snapshot(ctx context.Context, dbPath string, w io.Writer) error {
-	return snapshot(ctx, dbPath, w, nil)
+	return snapshot(ctx, dbPath, w, nil, nil)
 }
 
 // Share of the snapshot stage taken by each step (the bar's weights); the
@@ -73,7 +74,8 @@ const (
 	indexShare = 0.25
 )
 
-func snapshot(ctx context.Context, dbPath string, w io.Writer, report ProgressFunc) error {
+// only, when not empty, names the projects the snapshot keeps (see keepProjects).
+func snapshot(ctx context.Context, dbPath string, w io.Writer, only []string, report ProgressFunc) error {
 	report.send(Progress{Stage: "snapshot", Message: "Copying the database"})
 	tmp, err := os.CreateTemp(filepath.Dir(dbPath), ".snapshot-*.db")
 	if err != nil {
@@ -127,6 +129,12 @@ func snapshot(ctx context.Context, dbPath string, w io.Writer, report ProgressFu
 		return fmt.Errorf("vacuum into: %w", err)
 	}
 
+	if len(only) > 0 {
+		report.send(Progress{Stage: "snapshot", Message: "Leaving out the projects not chosen", Fraction: copyShare})
+		if err := keepProjects(ctx, tmpPath, only); err != nil {
+			return err
+		}
+	}
 	report.send(Progress{Stage: "snapshot", Message: "Dropping the search index (rebuilt on restore)", Fraction: copyShare})
 	if err := stripIndex(ctx, tmpPath); err != nil {
 		return fmt.Errorf("strip index: %w", err)
@@ -163,6 +171,66 @@ func snapshot(ctx context.Context, dbPath string, w io.Writer, report ProgressFu
 	}
 	report.send(Progress{Stage: "snapshot", Message: "Snapshot ready", Fraction: 1})
 	return nil
+}
+
+// metaPartial marks a snapshot that holds only some projects (JSON list of names).
+const metaPartial = "backup_partial"
+
+// keepProjects removes every project not named in only from the snapshot copy
+// at path, and records the kept names in meta so a restore can tell the
+// snapshot is partial. Unknown names are ignored; if none matches, it fails
+// rather than produce an empty database. Nothing of a removed project (rows,
+// history, glossary, reference languages) stays in the file.
+func keepProjects(ctx context.Context, path string, only []string) error {
+	st, err := store.Open(ctx, path)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	ps, err := st.Projects(ctx)
+	if err != nil {
+		return err
+	}
+	want := map[string]bool{}
+	for _, n := range only {
+		want[n] = true
+	}
+	var drop []int64
+	var kept []string
+	for _, p := range ps {
+		if want[p.Name] {
+			kept = append(kept, p.Name)
+		} else {
+			drop = append(drop, p.ID)
+		}
+	}
+	if len(kept) == 0 {
+		return fmt.Errorf("backup.projects %v matches no project", only)
+	}
+	if len(drop) == 0 {
+		return nil // everything is chosen: a whole snapshot
+	}
+	if err := st.DeleteProjects(ctx, drop...); err != nil {
+		return fmt.Errorf("leave out projects: %w", err)
+	}
+	b, _ := json.Marshal(kept)
+	if err := st.SetMeta(ctx, metaPartial, string(b)); err != nil {
+		return err
+	}
+	// Free the pages of the removed projects, so the file shrinks and holds no remnants.
+	_, err = st.W.ExecContext(ctx, "VACUUM")
+	return err
+}
+
+// PartialError is Restore's refusal to replace a database with a snapshot that
+// holds only some projects.
+type PartialError struct {
+	Name     string
+	Projects []string
+}
+
+func (e *PartialError) Error() string {
+	return fmt.Sprintf("snapshot %s holds only the projects %v; restoring it would replace the whole database and lose the others (a copy is kept as .bak). Restore with -allow-partial if that is what you want", e.Name, e.Projects)
 }
 
 // stripIndex empties the FTS index of the snapshot at path and compacts it.
@@ -218,6 +286,33 @@ func rebuildIndex(ctx context.Context, path string) error {
 	return nil
 }
 
+var errPartial = errors.New("partial snapshot")
+
+// takePartial checks the partial marker of a downloaded snapshot: without
+// consent it fails with errPartial (and the kept names); with consent it
+// removes the marker, since the restored database is then what it is.
+func takePartial(ctx context.Context, path string, allow bool) ([]string, error) {
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path))
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	var raw string
+	if err := db.QueryRowContext(ctx, "SELECT value FROM meta WHERE key = ?", metaPartial).Scan(&raw); errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	var kept []string
+	_ = json.Unmarshal([]byte(raw), &kept)
+	if !allow {
+		return kept, errPartial
+	}
+	_, err = db.ExecContext(ctx, "DELETE FROM meta WHERE key = ?", metaPartial)
+	return kept, err
+}
+
 // Result is the outcome of one backup run.
 type Result struct {
 	Name     string            `json:"name"`
@@ -229,11 +324,16 @@ type Result struct {
 
 // Run takes one snapshot and uploads it to every target, pruning old ones.
 func Run(ctx context.Context, dbPath string, targets []Target, keep int) (Result, error) {
-	return RunProgress(ctx, dbPath, targets, keep, nil)
+	return RunScoped(ctx, dbPath, targets, keep, nil, nil)
 }
 
 // RunProgress is Run that reports its progress.
 func RunProgress(ctx context.Context, dbPath string, targets []Target, keep int, report ProgressFunc) (Result, error) {
+	return RunScoped(ctx, dbPath, targets, keep, nil, report)
+}
+
+// RunScoped is RunProgress for the named projects only (empty = all of them).
+func RunScoped(ctx context.Context, dbPath string, targets []Target, keep int, only []string, report ProgressFunc) (Result, error) {
 	start := time.Now()
 	res := Result{Name: prefix + start.Format(stamp) + suffix, At: start}
 	if len(targets) == 0 {
@@ -245,7 +345,7 @@ func RunProgress(ctx context.Context, dbPath string, targets []Target, keep int,
 	}
 	defer os.Remove(f.Name())
 	defer f.Close()
-	if err := snapshot(ctx, dbPath, f, report); err != nil {
+	if err := snapshot(ctx, dbPath, f, only, report); err != nil {
 		return res, err
 	}
 	if res.Size, err = f.Seek(0, io.SeekCurrent); err != nil {
@@ -343,6 +443,12 @@ func List(ctx context.Context, t Target) ([]string, error) {
 // database must not be open (stop the server first). The previous database
 // is kept as dbPath+".bak".
 func Restore(ctx context.Context, t Target, name, dbPath string) error {
+	return RestoreScoped(ctx, t, name, dbPath, false)
+}
+
+// RestoreScoped is Restore that, with allowPartial, also accepts a snapshot of
+// only some projects (and then drops its partial marker).
+func RestoreScoped(ctx context.Context, t Target, name, dbPath string, allowPartial bool) error {
 	if name == "" || name == "latest" {
 		var err error
 		if name, err = Latest(ctx, t); err != nil {
@@ -373,6 +479,12 @@ func Restore(ctx context.Context, t Target, name, dbPath string) error {
 	}
 	if err := rebuildIndex(ctx, tmpDB); err != nil {
 		return fmt.Errorf("rebuild search index: %w", err)
+	}
+	if kept, err := takePartial(ctx, tmpDB, allowPartial); err != nil {
+		if errors.Is(err, errPartial) {
+			return &PartialError{Name: name, Projects: kept}
+		}
+		return err
 	}
 	for _, sfx := range []string{"-wal", "-shm"} {
 		if err := os.Remove(dbPath + sfx); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -447,6 +559,7 @@ type Manager struct {
 	log     *slog.Logger
 
 	mu      sync.Mutex
+	reload  chan struct{} // told when Reconfigure changed the settings
 	running bool
 	lastRev int64
 	last    *Result
@@ -459,7 +572,43 @@ func NewManager(st *store.Store, cfg config.Backup, log *slog.Logger) (*Manager,
 	if err != nil {
 		return nil, err
 	}
-	return &Manager{st: st, cfg: cfg, targets: targets, log: log, lastRev: st.Rev()}, nil
+	return &Manager{st: st, cfg: cfg, targets: targets, log: log, lastRev: st.Rev(), reload: make(chan struct{}, 1)}, nil
+}
+
+// config returns the current settings and targets.
+func (m *Manager) config() (config.Backup, []Target) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cfg, m.targets
+}
+
+// Reconfigure applies new backup settings (targets, interval, keep, projects)
+// without a restart. It fails with ErrRunning while a backup is in progress,
+// and leaves the old settings when the new ones are invalid.
+func (m *Manager) Reconfigure(cfg config.Backup) error {
+	targets, err := Targets(cfg)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	if m.running {
+		m.mu.Unlock()
+		for _, t := range targets {
+			t.Close()
+		}
+		return ErrRunning
+	}
+	old := m.targets
+	m.cfg, m.targets = cfg, targets
+	m.mu.Unlock()
+	for _, t := range old {
+		t.Close()
+	}
+	select {
+	case m.reload <- struct{}{}:
+	default:
+	}
+	return nil
 }
 
 // Status returns the current state.
@@ -487,7 +636,8 @@ type Sizer interface {
 func (m *Manager) loadLast(ctx context.Context) {
 	var best *Result
 	var bestTarget Target
-	for _, t := range m.targets {
+	_, targets := m.config()
+	for _, t := range targets {
 		names, err := snapshots(ctx, t)
 		if err != nil {
 			m.log.Warn("backup: listing snapshots", "target", t.Name(), "err", err)
@@ -535,9 +685,10 @@ func (m *Manager) NowProgress(ctx context.Context, report ProgressFunc) (Result,
 	}
 	m.running = true
 	rev := m.st.Rev()
+	cfg, targets := m.cfg, m.targets
 	m.mu.Unlock()
 
-	res, err := RunProgress(ctx, m.st.Path, m.targets, m.cfg.Keep, report)
+	res, err := RunScoped(ctx, m.st.Path, targets, cfg.Keep, cfg.Projects, report)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -559,25 +710,32 @@ func (m *Manager) NowProgress(ctx context.Context, report ProgressFunc) (Result,
 // Loop backs up every Interval when there were edits, and once more when
 // ctx ends (graceful shutdown). It returns after that final backup.
 func (m *Manager) Loop(ctx context.Context) {
-	if len(m.targets) == 0 {
-		<-ctx.Done()
-		return
-	}
 	go m.loadLast(ctx)
-	var tick <-chan time.Time
-	if m.cfg.Interval > 0 {
-		t := time.NewTicker(m.cfg.Interval)
-		defer t.Stop()
-		tick = t.C
-	}
 	for {
+		cfg, targets := m.config()
+		var timer *time.Ticker
+		var tick <-chan time.Time
+		if len(targets) > 0 && cfg.Interval > 0 {
+			timer = time.NewTicker(cfg.Interval)
+			tick = timer.C
+		}
+		stop := func() {
+			if timer != nil {
+				timer.Stop()
+			}
+		}
 		select {
 		case <-tick:
+			stop()
 			if m.Status().Dirty {
 				m.Now(ctx)
 			}
+		case <-m.reload: // new settings: start over with them
+			stop()
+			go m.loadLast(ctx)
 		case <-ctx.Done():
-			if m.Status().Dirty {
+			stop()
+			if len(targets) > 0 && m.Status().Dirty {
 				m.log.Info("backup before exit")
 				fin, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 				m.Now(fin)
@@ -590,7 +748,8 @@ func (m *Manager) Loop(ctx context.Context) {
 
 // Close releases target connections.
 func (m *Manager) Close() {
-	for _, t := range m.targets {
+	_, targets := m.config()
+	for _, t := range targets {
 		t.Close()
 	}
 }

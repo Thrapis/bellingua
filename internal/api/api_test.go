@@ -516,3 +516,38 @@ func TestCrossOriginProtection(t *testing.T) {
 		t.Errorf("cross-site GET: status %d", res.StatusCode)
 	}
 }
+
+func TestProjectOrderAPI(t *testing.T) {
+	ts, p := newServer(t) // project "p"
+	var ids []int64
+	ids = append(ids, p.ID)
+	for _, n := range []string{"q", "r"} {
+		_, b := do(t, ts, "POST", "/api/projects", map[string]any{"name": n, "sourceLang": "ru", "targetLang": "be"})
+		var np struct{ ID int64 }
+		json.Unmarshal(b, &np)
+		ids = append(ids, np.ID)
+	}
+	order := func() []string {
+		_, b := do(t, ts, "GET", "/api/projects", nil)
+		var ps []struct{ Name string }
+		json.Unmarshal(b, &ps)
+		var out []string
+		for _, x := range ps {
+			out = append(out, x.Name)
+		}
+		return out
+	}
+	if got := strings.Join(order(), ","); got != "p,q,r" {
+		t.Fatalf("start = %s", got)
+	}
+	res, b := do(t, ts, "PUT", "/api/projects/order", map[string]any{"ids": []int64{ids[2], ids[0], ids[1]}})
+	if res.StatusCode != 200 || !strings.Contains(string(b), `"name":"r"`) {
+		t.Fatalf("PUT: %d %s", res.StatusCode, b)
+	}
+	if got := strings.Join(order(), ","); got != "r,p,q" {
+		t.Errorf("after = %s (the list's ETag must change with the order)", got)
+	}
+	if res, _ := do(t, ts, "PUT", "/api/projects/order", map[string]any{"ids": []int64{9999}}); res.StatusCode != http.StatusBadRequest {
+		t.Errorf("unknown id: %d", res.StatusCode)
+	}
+}

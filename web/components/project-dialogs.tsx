@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
-import { api, ApiError, type Project, type State } from "@/lib/api";
+import { api, ApiError, type CrowdinTarget, type Project, type State } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -308,6 +308,129 @@ export function SettingsDialog({ open, onOpenChange, project }: DialogProps & { 
             Save & recheck
           </Button>
         </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Crowdin: without `project` it copies a Crowdin project into a new one; with
+ * one it shows the link and pulls again. Read-only towards Crowdin; the token
+ * is set in bellingua.yaml or the environment and never shown.
+ */
+export function CrowdinDialog({ open, onOpenChange, project }: DialogProps & { project?: Project }) {
+  const qc = useQueryClient();
+  const info = useQuery({
+    queryKey: ["crowdin", project?.id],
+    queryFn: () => api.crowdin(project!.id),
+    enabled: !!project,
+  });
+  const link = info.data?.link;
+  const tokenSet = project ? info.data?.tokenSet : undefined;
+  const [remote, setRemote] = useState("");
+  const [org, setOrg] = useState("");
+  const [lang, setLang] = useState("");
+  const [name, setName] = useState("");
+  const target = (): CrowdinTarget => ({
+    remoteId: Number(remote),
+    organization: org.trim() || undefined,
+    targetLang: lang.trim() || undefined,
+  });
+  const done = () => {
+    qc.invalidateQueries({ queryKey: ["crowdin"] });
+    qc.invalidateQueries({ queryKey: ["projects"] });
+    onOpenChange(false);
+  };
+  const copy = useMutation({
+    mutationFn: () => api.copyCrowdin({ ...target(), name: name.trim() || undefined }),
+    onSuccess: () => {
+      toast.info("Copying the Crowdin project…");
+      done();
+    },
+    onError: (e) => toast.error(errText(e)),
+  });
+  const relink = useMutation({
+    mutationFn: () => api.linkCrowdin(project!.id, target()),
+    onSuccess: () => {
+      toast.success("Linked");
+      qc.invalidateQueries({ queryKey: ["crowdin"] });
+    },
+    onError: (e) => toast.error(errText(e)),
+  });
+  const pull = useMutation({
+    mutationFn: () => api.pullCrowdin(project!.id),
+    onSuccess: done,
+    onError: (e) => toast.error(errText(e)),
+  });
+  const validId = Number.isInteger(Number(remote)) && Number(remote) > 0;
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-xl">
+        <form
+          className="grid gap-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!project) copy.mutate();
+            else if (!link) relink.mutate();
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>{project ? "Crowdin project" : "Copy a Crowdin project"}</DialogTitle>
+            <DialogDescription>
+              Reads sources, translations and approvals from Crowdin; nothing is sent back. Pull again later to merge
+              new strings; translations you wrote here are kept.
+            </DialogDescription>
+          </DialogHeader>
+          {tokenSet === false && (
+            <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
+              No Crowdin token. Set <code>crowdin.token</code> in bellingua.yaml or the{" "}
+              <code>BELLINGUA_CROWDIN_TOKEN</code> environment variable (a personal access token with read-only
+              scopes) and restart bellingua.
+            </p>
+          )}
+          {project && link && (
+            <div className="rounded-md border p-3 text-sm">
+              <p>
+                Linked to Crowdin project <span className="font-medium">{link.identifier || link.remoteId}</span> (id{" "}
+                {link.remoteId}), language {link.targetLang}.
+              </p>
+              <p className="text-muted-foreground">
+                {link.lastPull ? `Last pulled ${new Date(link.lastPull * 1000).toLocaleString()}.` : "Not pulled yet."}
+              </p>
+            </div>
+          )}
+          {(!project || !link) && (
+            <>
+              <Field label="Crowdin project id" hint="The number in the project's API settings (Tools → API), not the URL slug.">
+                <Input autoFocus value={remote} onChange={(e) => setRemote(e.target.value)} inputMode="numeric" />
+              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Target language" hint="Crowdin language id, e.g. be. Optional with one target language.">
+                  <Input value={lang} onChange={(e) => setLang(e.target.value)} />
+                </Field>
+                <Field label="Enterprise organization" hint="Leave empty for crowdin.com.">
+                  <Input value={org} onChange={(e) => setOrg(e.target.value)} />
+                </Field>
+              </div>
+              {!project && (
+                <Field label="Project name" hint="Default: the Crowdin project's name.">
+                  <Input value={name} onChange={(e) => setName(e.target.value)} />
+                </Field>
+              )}
+            </>
+          )}
+          <DialogFooter>
+            {project && link ? (
+              <Button type="button" disabled={pull.isPending || tokenSet === false} onClick={() => pull.mutate()}>
+                Pull from Crowdin
+              </Button>
+            ) : (
+              <Button type="submit" disabled={!validId || copy.isPending || relink.isPending}>
+                {project ? "Link" : "Copy project"}
+              </Button>
+            )}
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );
