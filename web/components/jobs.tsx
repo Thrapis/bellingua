@@ -21,6 +21,7 @@ const kindLabel: Record<Job["kind"], string> = {
   qa: "QA recheck",
   backup: "Backup",
   tm: "Translation memory fill",
+  "crowdin-pull": "Crowdin pull",
 };
 
 function summary(j: Job): string {
@@ -38,6 +39,8 @@ function summary(j: Job): string {
       return `${r.changed ?? 0} units changed`;
     case "backup":
       return `${r.name ?? ""}`;
+    case "crowdin-pull":
+      return `${r.Units ?? 0} units · ${r.Inserted ?? 0} new · ${r.Updated ?? 0} updated · ${r.SourceChanged ?? 0} source changed · ${r.Obsolete ?? 0} obsolete${r.pluralSkipped ? ` · ${r.pluralSkipped} plural skipped` : ""}`;
     case "tm":
       return `${r.filled ?? 0} strings filled from 100% matches`;
   }

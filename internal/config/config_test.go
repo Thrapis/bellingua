@@ -50,3 +50,18 @@ func TestDataServerValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestCrowdinToken(t *testing.T) {
+	t.Setenv("BELLINGUA_CROWDIN_TOKEN", "from-env")
+	c, err := load(t, "crowdin:\n  token: from-file\n")
+	if err != nil || c.Crowdin.Token != "from-file" {
+		t.Fatalf("file token wins: %v %q", err, c.Crowdin.Token)
+	}
+	if c, err = load(t, "listen: 127.0.0.1:1\n"); err != nil || c.Crowdin.Token != "from-env" {
+		t.Fatalf("env fallback: %v %q", err, c.Crowdin.Token)
+	}
+	// No config file at all still honours the environment.
+	if c, err = Load(filepath.Join(t.TempDir(), "none.yaml"), true); err != nil || c.Crowdin.Token != "from-env" {
+		t.Fatalf("no file: %v %q", err, c.Crowdin.Token)
+	}
+}

@@ -6,6 +6,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import {
   BookMarked,
+  CloudDownload,
   CloudUpload,
   Download,
   EllipsisVertical,
@@ -33,15 +34,16 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { CountsBar, donePct, Legend } from "@/components/pieces";
 import { BackupRow, RunningJobs, useJobs } from "@/components/jobs";
-import { ExportDialog, ImportDialog, NewProjectDialog, SettingsDialog } from "@/components/project-dialogs";
+import { CrowdinDialog, ExportDialog, ImportDialog, NewProjectDialog, SettingsDialog } from "@/components/project-dialogs";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useConfirm } from "@/components/confirm";
 
-type DialogKind = "import" | "export" | "settings";
+type DialogKind = "import" | "export" | "settings" | "crowdin";
 
 export default function Home() {
   const projects = useQuery({ queryKey: ["projects"], queryFn: api.projects });
   const [creating, setCreating] = useState(false);
+  const [copying, setCopying] = useState(false);
   const [dialog, setDialog] = useState<{ kind: DialogKind; project: Project } | null>(null);
 
   return (
@@ -51,6 +53,9 @@ export default function Home() {
         <h1 className="text-xl font-semibold tracking-tight">bellingua</h1>
         <div className="flex-1" />
         <ThemeToggle />
+        <Button variant="outline" onClick={() => setCopying(true)}>
+          <CloudDownload /> Copy from Crowdin
+        </Button>
         <Button onClick={() => setCreating(true)}>
           <Plus /> New project
         </Button>
@@ -82,6 +87,10 @@ export default function Home() {
         onOpenChange={setCreating}
         onCreated={(p) => setDialog({ kind: "import", project: p })}
       />
+      {copying && <CrowdinDialog open onOpenChange={(o) => !o && setCopying(false)} />}
+      {dialog?.kind === "crowdin" && (
+        <CrowdinDialog open onOpenChange={(o) => !o && setDialog(null)} project={dialog.project} />
+      )}
       {dialog?.kind === "import" && (
         <ImportDialog open onOpenChange={(o) => !o && setDialog(null)} project={dialog.project} />
       )}
@@ -156,6 +165,9 @@ function ProjectCard({ project: p, onDialog }: { project: Project; onDialog: (k:
           <DropdownMenuContent align="end">
             <DropdownMenuItem onSelect={() => onDialog("import")}>
               <FolderInput /> Import…
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => onDialog("crowdin")}>
+              <CloudDownload /> Crowdin…
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => onDialog("export")}>
               <Download /> Export…

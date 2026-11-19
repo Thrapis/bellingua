@@ -403,6 +403,26 @@ the pieces are recovered with `model.SplitTarget`:
   It never opens the DB. It reports errors without `fail()`'s "Press Enter",
   which would read the client's stdin.
 
+### Crowdin link (`internal/crowdin`, `api/crowdin*.go`, `store/links.go`)
+
+- **Read-only client** (stdlib `net/http`, Crowdin API v2): project, files, strings,
+  translations and approvals of one target language, paged by 500, a 429 retried
+  with `Retry-After`. Plural strings are skipped and counted. Tests use an `httptest` fake.
+- **Token** only from `crowdin.token` / `$BELLINGUA_CROWDIN_TOKEN`, never in the DB or an
+  API answer. The request never names the host: crowdin.com, or
+  `{organization}.api.crowdin.com` (`crowdin.BaseForOrg`), or the config's `baseUrl`.
+- **Link**: `project_links` (migration 10: remote id, lower-case identifier, languages,
+  `last_pull`). A pull is the job `crowdin-pull`; `importer.ImportFiles` runs the same
+  `writeAll` as a tree import, so the merge rules above apply unchanged (human work is
+  kept). Files are stored as `crowdin-csv`; a unit's key is the Crowdin identifier,
+  `id:<stringId>` when empty, `<identifier>#<stringId>` when repeated. A Crowdin
+  translation is state translated, approved when it has an approval; Crowdin's
+  pre-translation flag is not looked at.
+- **Lookup for the crowdin-helper extension**: `GET /api/crowdin/lookup` (project
+  identifier + source text; exact via `ExactMatches`, then the `tm.Manager` fuzzy index)
+  and `/lookup.json` (every unit with a translation, ETag from `Rev` and `minState`).
+  `extensionCORS` answers `moz-extension://`/`chrome-extension://` origins only.
+
 ### Frontend (`web/`)
 
 - **Setup**: Next.js 16 app router, React Compiler, shadcn/ui on **Radix**

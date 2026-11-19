@@ -131,9 +131,18 @@ func Import(ctx context.Context, st *store.Store, runner *qa.Runner, opt Options
 	}()
 	go func() { wg.Wait(); close(results) }()
 
+	stats, err := writeAll(ctx, st, runner, opt.ProjectID, opt.Format, paths, results, opt.Progress, log)
+	stats.Duration = time.Since(start)
+	return stats, err
+}
+
+// writeAll is the writing half of an import: one transaction that creates the
+// file rows, then writes each parsed file as it arrives.
+func writeAll(ctx context.Context, st *store.Store, runner *qa.Runner, projectID int64, format string, paths []string,
+	results <-chan parsed, progress func(done, total int), log *slog.Logger) (Stats, error) {
 	var stats Stats
-	err = st.Write(ctx, func(tx *sql.Tx) error {
-		w, err := newWriter(ctx, tx, opt.ProjectID, runner)
+	err := st.Write(ctx, func(tx *sql.Tx) error {
+		w, err := newWriter(ctx, tx, projectID, runner)
 		if err != nil {
 			return err
 		}
@@ -149,7 +158,7 @@ func Import(ctx context.Context, st *store.Store, runner *qa.Runner, opt Options
 		}
 		// Create file rows up front, in path order, so file ids (and with
 		// them the list order) follow the tree.
-		if err := w.ensureFiles(paths, opt.Format); err != nil {
+		if err := w.ensureFiles(paths, format); err != nil {
 			return err
 		}
 		done := 0
@@ -161,8 +170,8 @@ func Import(ctx context.Context, st *store.Store, runner *qa.Runner, opt Options
 				return fmt.Errorf("%s: %w", r.path, err)
 			}
 			done++
-			if opt.Progress != nil {
-				opt.Progress(done, len(paths))
+			if progress != nil {
+				progress(done, len(paths))
 			}
 		}
 		if err := ctx.Err(); err != nil {
@@ -172,9 +181,8 @@ func Import(ctx context.Context, st *store.Store, runner *qa.Runner, opt Options
 			return nil
 		}
 		log.Info("import: rebuilding index")
-		return store.EndBulk(ctx, tx, opt.ProjectID)
+		return store.EndBulk(ctx, tx, projectID)
 	})
-	stats.Duration = time.Since(start)
 	return stats, err
 }
 

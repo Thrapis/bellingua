@@ -39,6 +39,7 @@ import (
 var commands = map[string]func(ctx context.Context, args []string) error{
 	"serve":    cmdServe,
 	"import":   cmdImport,
+	"crowdin":  cmdCrowdin,
 	"export":   cmdExport,
 	"qa":       cmdQA,
 	"backup":   cmdBackup,
@@ -123,6 +124,7 @@ bellingua.db in the executable's folder.
 commands:
   serve      run the web editor
   import     import an XLIFF / Crowdin CSV tree into a project (-extra: a reference language)
+  crowdin    link a project to a Crowdin project and pull it (read-only)
   export     export a project as a file tree
   qa         recompute QA checks of a project
   backup     snapshot the database to the configured targets

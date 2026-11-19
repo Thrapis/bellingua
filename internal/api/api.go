@@ -113,6 +113,26 @@ func (s *Server) Handler() http.Handler {
 	h("POST /api/projects/{pid}/qa", s.qaJob)
 	h("POST /api/projects/{pid}/mt", s.mtJob)
 	h("POST /api/projects/{pid}/import", s.importJob)
+	h("GET /api/projects/{pid}/crowdin", s.getCrowdin)
+	h("PUT /api/projects/{pid}/crowdin", s.putCrowdin)
+	h("POST /api/projects/{pid}/crowdin/pull", s.pullCrowdin)
+	h("POST /api/crowdin/projects", s.crowdinProjects)
+	// Read-only lookups for the crowdin-helper browser extension, with CORS for
+	// extension origins (and their preflights) only.
+	for pattern, fn := range map[string]func(w http.ResponseWriter, r *http.Request) error{
+		"/api/crowdin/lookup":      s.crowdinLookup,
+		"/api/crowdin/lookup.json": s.crowdinLookupAll,
+	} {
+		get := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if err := fn(w, r); err != nil {
+				s.fail(w, r, err)
+			}
+		})
+		mux.Handle("GET "+pattern, extensionCORS(get))
+		mux.Handle("OPTIONS "+pattern, extensionCORS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			writeError(w, http.StatusNotFound, "no such endpoint", nil) // a preflight from a page, not an extension
+		})))
+	}
 	h("GET /api/projects/{pid}/langs", s.listLangs)
 	h("POST /api/projects/{pid}/langs/import", s.importLangJob)
 	h("DELETE /api/projects/{pid}/langs/{lang}", s.deleteLang)

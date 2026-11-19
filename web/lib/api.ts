@@ -182,7 +182,7 @@ export type Info = {
 
 export type Job = {
   id: string;
-  kind: "import" | "export" | "mt" | "qa" | "backup" | "tm";
+  kind: "import" | "export" | "mt" | "qa" | "backup" | "tm" | "crowdin-pull";
   project?: number;
   status: "running" | "done" | "failed" | "canceled";
   done: number;
@@ -278,6 +278,18 @@ export function filterParams(f: Filter): URLSearchParams {
   return p;
 }
 
+export type CrowdinLink = {
+  projectId: number;
+  remoteId: number;
+  identifier: string;
+  baseUrl?: string;
+  sourceLang: string;
+  targetLang: string;
+  lastPull: number; // unix seconds, 0 = never
+};
+export type CrowdinInfo = { tokenSet: boolean; link: CrowdinLink | null };
+export type CrowdinTarget = { remoteId: number; organization?: string; targetLang?: string };
+
 export const api = {
   info: () => request<Info>("GET", "/info"),
   projects: () => request<Project[]>("GET", "/projects"),
@@ -321,6 +333,10 @@ export const api = {
   mtBatch: (id: number, f: Filter, v: { overwrite: boolean; glossary: boolean }) =>
     request<Job>("POST", `/projects/${id}/mt?${filterParams(f)}`, v),
   qaRecheck: (id: number) => request<Job>("POST", `/projects/${id}/qa`),
+  crowdin: (id: number) => request<CrowdinInfo>("GET", `/projects/${id}/crowdin`),
+  linkCrowdin: (id: number, b: CrowdinTarget) => request<CrowdinLink>("PUT", `/projects/${id}/crowdin`, b),
+  pullCrowdin: (id: number) => request<Job>("POST", `/projects/${id}/crowdin/pull`),
+  copyCrowdin: (b: CrowdinTarget & { name?: string }) => request<Job>("POST", "/crowdin/projects", b),
   importDir: (id: number, b: { dir: string; format: string }) =>
     request<Job>("POST", `/projects/${id}/import`, b),
   exportDir: (id: number, b: { dir: string; format: string; minState: State }) =>

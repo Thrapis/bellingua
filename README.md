@@ -161,6 +161,22 @@ Copy `bellingua.example.yaml` to `bellingua.yaml` (read from the working
 directory, or pass `-config`). It sets the DB path, the listen address, the MT
 providers and the backup targets. Every command also accepts `-db`.
 
+### Crowdin projects
+
+A project can be copied from a Crowdin project and pulled again later (nothing
+is ever sent to Crowdin). Create a personal access token on Crowdin with
+**read-only** scopes (Languages, Projects: Source files & strings,
+Translations) and put it in `crowdin.token` of `bellingua.yaml` or in the
+`BELLINGUA_CROWDIN_TOKEN` environment variable. Then use "Copy from Crowdin"
+on the home page, or `bellingua crowdin -project P -remote 123` (the id is in
+the project's Tools → API). Crowdin Enterprise: give the organization. Plural
+strings are skipped for now.
+
+The Firefox crowdin-helper extension can read the result from
+`GET /api/crowdin/lookup?project=<identifier>&text=<source>` (exact then fuzzy
+matches) or `GET /api/crowdin/lookup.json?project=<identifier>` (the whole
+vocabulary, revalidated by ETag); both answer extension origins only.
+
 ### Backup to a VPS
 
 1. Create an SSH user on the VPS and authorize an **unencrypted** key for it.
@@ -195,6 +211,7 @@ keeps the previous database as `bellingua.db.bak`.
 | *(no arguments)* | `serve -open` with the data in the exe's folder (a double-click) |
 | `serve [-listen addr] [-open]` | web editor + API; if bellingua already runs there, `-open` just opens it |
 | `import -project P -in DIR [-format xliff\|crowdin-csv] [-source-lang en -target-lang de]` | import or re-import a tree; creates the project if needed (languages default to the XLIFF header) |
+| `crowdin -project P [-remote N] [-org O] [-target be]` | link a project to a Crowdin project (created if missing) and pull it; without `-remote` it pulls the remembered link |
 | `export -project P -out DIR [-format …] [-min-state mt\|translated\|approved]` | export a tree mirroring the import |
 | `qa -project P` | recompute QA for all units (after changing checks) |
 | `backup [-list]`, `restore [-from NAME] [-target dir\|sftp\|data]` | see above |
