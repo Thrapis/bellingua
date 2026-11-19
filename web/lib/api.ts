@@ -278,6 +278,37 @@ export function filterParams(f: Filter): URLSearchParams {
   return p;
 }
 
+export type SftpSettings = { host: string; port: number; user: string; key: string; knownHosts: string; dir: string };
+export type DataSettings = { url: string; app: string; folder: string; caFile: string; timeout: string; tokenSet?: boolean };
+export type Settings = {
+  path: string;
+  general: { logLevel: string; listen: string; db: string };
+  backup: {
+    interval: string;
+    keep: number;
+    dir: string;
+    projects: string[]; // empty = every project
+    sftp: SftpSettings | null;
+    data: DataSettings | null;
+  };
+  crowdin: { baseUrl: string; tokenSet: boolean };
+  projects: string[];
+  restartRequired?: string[];
+};
+/** What PUT /settings takes: only the sections to change. An all-empty sftp or data turns that target off. */
+export type SettingsPatch = {
+  general?: { logLevel?: string };
+  backup?: {
+    interval?: string;
+    keep?: number;
+    dir?: string;
+    projects?: string[];
+    sftp?: SftpSettings;
+    data?: Omit<DataSettings, "tokenSet">;
+  };
+  crowdin?: { baseUrl?: string };
+};
+
 export type CrowdinLink = {
   projectId: number;
   remoteId: number;
@@ -333,6 +364,8 @@ export const api = {
   mtBatch: (id: number, f: Filter, v: { overwrite: boolean; glossary: boolean }) =>
     request<Job>("POST", `/projects/${id}/mt?${filterParams(f)}`, v),
   qaRecheck: (id: number) => request<Job>("POST", `/projects/${id}/qa`),
+  appSettings: () => request<Settings>("GET", "/settings"),
+  saveAppSettings: (b: SettingsPatch) => request<Settings>("PUT", "/settings", b),
   crowdin: (id: number) => request<CrowdinInfo>("GET", `/projects/${id}/crowdin`),
   linkCrowdin: (id: number, b: CrowdinTarget) => request<CrowdinLink>("PUT", `/projects/${id}/crowdin`, b),
   pullCrowdin: (id: number) => request<Job>("POST", `/projects/${id}/crowdin/pull`),

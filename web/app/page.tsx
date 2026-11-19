@@ -15,6 +15,7 @@ import {
   Languages,
   Lock,
   Plus,
+  Settings,
   ShieldCheck,
   SlidersHorizontal,
   Trash2,
@@ -53,6 +54,11 @@ export default function Home() {
         <h1 className="text-xl font-semibold tracking-tight">bellingua</h1>
         <div className="flex-1" />
         <ThemeToggle />
+        <Button asChild variant="ghost" size="icon" aria-label="Settings" title="Settings">
+          <Link href="/settings">
+            <Settings />
+          </Link>
+        </Button>
         <Button variant="outline" onClick={() => setCopying(true)}>
           <CloudDownload /> Copy from Crowdin
         </Button>
@@ -329,7 +335,11 @@ function BackupCard() {
           </>
         ) : (
           <p className="text-muted-foreground">
-            Backups are off. Set <code>backup.dir</code>, <code>backup.sftp</code> and/or <code>backup.data</code> in bellingua.yaml.
+            Backups are off.{" "}
+            <Link href="/settings" className="underline">
+              Choose where to back up
+            </Link>
+            .
           </p>
         )}
       </div>

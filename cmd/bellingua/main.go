@@ -139,8 +139,9 @@ run "bellingua <command> -h" for the command's flags
 
 // env is what every command gets after the common flags are parsed.
 type env struct {
-	cfg config.Config
-	log *slog.Logger
+	cfg  config.Config
+	path string // the config file (it may not exist)
+	log  *slog.Logger
 }
 
 // commonFlags registers -config and -db on fs and returns a loader.
@@ -156,7 +157,7 @@ func commonFlags(fs *flag.FlagSet) func() (*env, error) {
 		if *db != "" {
 			cfg.DB = *db
 		}
-		return &env{cfg: cfg, log: newLogger(cfg.LogLevel)}, nil
+		return &env{cfg: cfg, path: *cfgPath, log: newLogger(cfg.LogLevel)}, nil
 	}
 }
 

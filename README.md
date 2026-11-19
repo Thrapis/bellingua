@@ -161,6 +161,19 @@ Copy `bellingua.example.yaml` to `bellingua.yaml` (read from the working
 directory, or pass `-config`). It sets the DB path, the listen address, the MT
 providers and the backup targets. Every command also accepts `-db`.
 
+### Settings in the app
+
+The gear on the home page opens **Settings**: the backup targets, interval and
+kept snapshots, which projects to back up, the Crowdin API address and the log
+level. Saving writes `bellingua.yaml` (its comments stay) and applies the backup
+and Crowdin settings at once; the log level needs a restart. Tokens are never
+shown or written there: they stay in the file or the environment.
+
+**Backing up only some projects** (`backup.projects`, a list of names; empty = all):
+a snapshot then holds just those projects, with nothing of the others left in the
+file. Restoring it replaces the whole database, so `bellingua restore` refuses
+until you add `-allow-partial` (the current database is kept as `.bak`).
+
 ### Crowdin projects
 
 A project can be copied from a Crowdin project and pulled again later (nothing

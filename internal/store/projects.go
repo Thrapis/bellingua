@@ -184,25 +184,36 @@ func (s *Store) SaveSettings(ctx context.Context, id int64, st Settings) error {
 
 // DeleteProject removes a project and everything in it.
 func (s *Store) DeleteProject(ctx context.Context, id int64) error {
+	return s.DeleteProjects(ctx, id)
+}
+
+// DeleteProjects removes several projects and everything in them in one
+// transaction (one rebuild of the search index, not one per project).
+func (s *Store) DeleteProjects(ctx context.Context, ids ...int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
 	return s.Write(ctx, func(tx *sql.Tx) error {
 		if err := BeginBulk(ctx, tx); err != nil {
 			return err
 		}
-		for _, q := range []string{
-			"DELETE FROM history WHERE project_id = ?",
-			"DELETE FROM unit_langs_fts WHERE unit_id IN (SELECT id FROM units WHERE project_id = ?)",
-			"DELETE FROM unit_langs WHERE unit_id IN (SELECT id FROM units WHERE project_id = ?)",
-			"DELETE FROM project_langs WHERE project_id = ?",
-			"DELETE FROM project_links WHERE project_id = ?",
-			"DELETE FROM units WHERE project_id = ?",
-			"DELETE FROM files WHERE project_id = ?",
-			"DELETE FROM projects WHERE id = ?",
-		} {
-			if _, err := tx.ExecContext(ctx, q, id); err != nil {
-				return err
+		for _, id := range ids {
+			for _, q := range []string{
+				"DELETE FROM history WHERE project_id = ?",
+				"DELETE FROM unit_langs_fts WHERE unit_id IN (SELECT id FROM units WHERE project_id = ?)",
+				"DELETE FROM unit_langs WHERE unit_id IN (SELECT id FROM units WHERE project_id = ?)",
+				"DELETE FROM project_langs WHERE project_id = ?",
+				"DELETE FROM project_links WHERE project_id = ?",
+				"DELETE FROM units WHERE project_id = ?",
+				"DELETE FROM files WHERE project_id = ?",
+				"DELETE FROM projects WHERE id = ?",
+			} {
+				if _, err := tx.ExecContext(ctx, q, id); err != nil {
+					return err
+				}
 			}
 		}
-		return EndBulk(ctx, tx, id)
+		return EndBulk(ctx, tx, ids[0])
 	})
 }
 

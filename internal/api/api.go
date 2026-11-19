@@ -30,13 +30,15 @@ import (
 
 // Server holds the dependencies of the handlers.
 type Server struct {
-	st     *store.Store
-	cfg    config.Config
-	mt     mt.Chain
-	backup *backup.Manager
-	jobs   *Jobs
-	log    *slog.Logger
-	static fs.FS // the exported Next.js app; nil disables the UI
+	st      *store.Store
+	cfgMu   sync.RWMutex // guards cfg's backup and crowdin parts and cfgPath, which the settings page changes
+	cfg     config.Config
+	cfgPath string // the file the settings page edits
+	mt      mt.Chain
+	backup  *backup.Manager
+	jobs    *Jobs
+	log     *slog.Logger
+	static  fs.FS // the exported Next.js app; nil disables the UI
 
 	mtStatus func() mtserver.Status // nil when no local MT server is supervised
 
@@ -97,6 +99,8 @@ func (s *Server) Handler() http.Handler {
 		})
 	}
 	h("GET /api/info", s.info)
+	h("GET /api/settings", s.getSettings)
+	h("PUT /api/settings", s.putSettings)
 	h("GET /api/projects", s.listProjects)
 	h("POST /api/projects", s.createProject)
 	h("GET /api/projects/{pid}", s.getProject)

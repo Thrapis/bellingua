@@ -70,6 +70,7 @@ type Provider struct {
 type Backup struct {
 	Interval time.Duration `yaml:"interval"` // automatic snapshot period when there were edits; 0 = off
 	Keep     int           `yaml:"keep"`     // snapshots to retain per target
+	Projects []string      `yaml:"projects"` // names of the projects to back up; empty = all
 	Dir      string        `yaml:"dir"`      // local (or mounted) directory target
 	SFTP     *SFTP         `yaml:"sftp"`     // remote target over SSH
 	Data     *DataServer   `yaml:"data"`     // go-data-server over HTTP(S)

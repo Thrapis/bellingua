@@ -16,15 +16,15 @@ import (
 // environment and is never stored or returned.
 
 func (s *Server) crowdinClient(l store.Link) (*crowdin.Client, error) {
-	if s.cfg.Crowdin.Token == "" {
+	if s.config().Crowdin.Token == "" {
 		return nil, &httpError{code: http.StatusPreconditionFailed,
 			msg: "No Crowdin token: set crowdin.token in the config file or the BELLINGUA_CROWDIN_TOKEN environment variable (a personal access token with read-only scopes) and restart."}
 	}
 	base := l.BaseURL
 	if base == "" {
-		base = s.cfg.Crowdin.BaseURL
+		base = s.config().Crowdin.BaseURL
 	}
-	return &crowdin.Client{Base: base, Token: s.cfg.Crowdin.Token}, nil
+	return &crowdin.Client{Base: base, Token: s.config().Crowdin.Token}, nil
 }
 
 // crowdinFail makes a Crowdin answer readable to the client: the user's own
@@ -79,7 +79,7 @@ func (s *Server) getCrowdin(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	out := map[string]any{"tokenSet": s.cfg.Crowdin.Token != "", "link": nil}
+	out := map[string]any{"tokenSet": s.config().Crowdin.Token != "", "link": nil}
 	switch l, err := s.st.Link(r.Context(), p.ID, store.LinkCrowdin); err {
 	case nil:
 		out["link"] = l

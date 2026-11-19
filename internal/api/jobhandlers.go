@@ -164,7 +164,7 @@ func (s *Server) mtJob(w http.ResponseWriter, r *http.Request) error {
 		var done, saved, failed, skipped atomic.Int64
 		var firstErr atomic.Value
 		var wg sync.WaitGroup
-		for range max(s.cfg.MT.Concurrency, 1) {
+		for range max(s.config().MT.Concurrency, 1) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()

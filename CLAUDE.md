@@ -183,6 +183,23 @@ the pieces are recovered with `model.SplitTarget`:
 - Per-project config lives in `projects.settings`. The API caches one `Runner`
   per settings value.
 
+### Settings in the UI (`api/settings.go`, `config/patch.go`)
+
+- **Storage**: `bellingua.yaml` itself. `config.Patch` edits it through yaml.v3 nodes (comments, other
+  keys and their order stay), writes a temp file, loads it as validation and only then renames it over
+  the original; an invalid result leaves the file untouched. Dotted keys; nil/empty removes a key and
+  a parent left empty. `GET/PUT /api/settings` (`Server.SetConfigPath`, `Server.config()` under `cfgMu`).
+- **Live**: only the backup and Crowdin parts of the config are taken over by the running server
+  (`backup.Manager.Reconfigure`: swaps targets, Loop restarts its timer, refused with `ErrRunning`
+  during a backup). `logLevel` is saved but reported in `restartRequired`; listen and db are read-only.
+- **Secrets** (`crowdin.token`, `backup.data.token`) are never returned or written; the API reports
+  `tokenSet`. Turning the data or sftp target off removes its whole section, a token in it too.
+- **Backup project choice** (`backup.projects`, names): `snapshot` takes `only`; `keepProjects` runs on
+  the `VACUUM INTO` copy: `Store.DeleteProjects` (one transaction), meta `backup_partial` (kept names),
+  `VACUUM` so nothing of a left-out project stays in the file. `RestoreScoped` refuses a partial
+  snapshot (`PartialError`) unless allowed (`restore -allow-partial`), and then drops the marker.
+  The automatic trigger is still the global `Rev`: an edit in an unchosen project also starts a backup.
+
 ### Glossary (`internal/glossary`, `store/terms.go`, `api/terms.go`)
 
 - **Storage**: terms live in `terms` (migration 2). Every change bumps
