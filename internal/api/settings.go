@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"path/filepath"
@@ -77,7 +78,7 @@ type settingsOut struct {
 	RestartRequired []string `json:"restartRequired,omitempty"` // PUT only: settings that apply after a restart
 }
 
-func (s *Server) settingsView() (settingsOut, error) {
+func (s *Server) settingsView(ctx context.Context) (settingsOut, error) {
 	c := s.config()
 	s.cfgMu.RLock()
 	path := s.cfgPath
@@ -97,21 +98,21 @@ func (s *Server) settingsView() (settingsOut, error) {
 		o.Backup.Data = &dataSettings{URL: x.URL, App: x.App, Folder: x.Folder, CAFile: x.CAFile, Timeout: x.Timeout.String(), TokenSet: x.Token != ""}
 	}
 	o.Crowdin.BaseURL, o.Crowdin.TokenSet = c.Crowdin.BaseURL, c.Crowdin.Token != ""
-	return o, nil
-}
-
-func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) error {
-	o, err := s.settingsView()
+	ps, err := s.st.Projects(ctx)
 	if err != nil {
-		return err
-	}
-	ps, err := s.st.Projects(r.Context())
-	if err != nil {
-		return err
+		return o, err
 	}
 	o.Projects = make([]string, 0, len(ps))
 	for _, p := range ps {
 		o.Projects = append(o.Projects, p.Name)
+	}
+	return o, nil
+}
+
+func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) error {
+	o, err := s.settingsView(r.Context())
+	if err != nil {
+		return err
 	}
 	return ok(w, o)
 }
@@ -258,7 +259,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 	}
-	o, err := s.settingsView()
+	o, err := s.settingsView(r.Context())
 	if err != nil {
 		return err
 	}

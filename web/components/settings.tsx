@@ -71,11 +71,12 @@ export function SettingsPage() {
 function SettingsForm({ initial }: { initial: Settings }) {
   const qc = useQueryClient();
   const b = initial.backup;
+  const projectNames = initial.projects ?? [];
   const [interval, setInterval] = useState(friendly(b.interval));
   const [keep, setKeep] = useState(String(b.keep));
   const [dir, setDir] = useState(b.dir);
-  const [allProjects, setAllProjects] = useState(b.projects.length === 0);
-  const [chosen, setChosen] = useState<string[]>(b.projects);
+  const [allProjects, setAllProjects] = useState((b.projects ?? []).length === 0);
+  const [chosen, setChosen] = useState<string[]>(b.projects ?? []);
   const [sftpOn, setSftpOn] = useState(!!b.sftp);
   const [sftp, setSftp] = useState(b.sftp ?? emptySftp);
   const [dataOn, setDataOn] = useState(!!b.data);
@@ -149,14 +150,14 @@ function SettingsForm({ initial }: { initial: Settings }) {
           </label>
           {!allProjects && (
             <div className="grid gap-2 rounded-md border p-3">
-              {initial.projects.length === 0 && <p className="text-sm text-muted-foreground">No projects yet.</p>}
-              {initial.projects.map((n) => (
+              {projectNames.length === 0 && <p className="text-sm text-muted-foreground">No projects yet.</p>}
+              {projectNames.map((n) => (
                 <label key={n} className="flex items-center gap-2 text-sm">
                   <Checkbox checked={chosen.includes(n)} onCheckedChange={(v) => toggle(n, v === true)} />
                   {n}
                 </label>
               ))}
-              {chosen.filter((n) => !initial.projects.includes(n)).map((n) => (
+              {chosen.filter((n) => !projectNames.includes(n)).map((n) => (
                 <label key={n} className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Checkbox checked onCheckedChange={(v) => toggle(n, v === true)} />
                   {n} (no such project now)
@@ -260,7 +261,7 @@ function SettingsForm({ initial }: { initial: Settings }) {
         <div className="grid grid-cols-2 gap-3">
           <Field label="Log level" hint="Applies after a restart.">
             <Select value={logLevel} onValueChange={setLogLevel}>
-              <SelectTrigger>
+              <SelectTrigger className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -272,11 +273,14 @@ function SettingsForm({ initial }: { initial: Settings }) {
               </SelectContent>
             </Select>
           </Field>
+          <span />
+          <Field label="Listen address" hint="Decides where bellingua is reachable, so it is set in the config file (restart needed).">
+            <Input value={initial.general.listen} readOnly disabled />
+          </Field>
+          <Field label="Database file" hint="Set in the config file or with -db (restart needed).">
+            <Input value={initial.general.db} readOnly disabled />
+          </Field>
         </div>
-        <p className="text-xs text-muted-foreground">
-          Listening on <code>{initial.general.listen}</code>, database <code>{initial.general.db}</code>. Change these
-          in the config file (a restart is needed, and they decide where bellingua is reachable).
-        </p>
       </Section>
 
       <div className="flex justify-end">

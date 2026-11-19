@@ -190,3 +190,21 @@ func TestSettingsTurnTargetsOff(t *testing.T) {
 		t.Errorf("section left behind:\n%s", raw)
 	}
 }
+
+// The page replaces its data with the answer to a save, so a PUT must carry the
+// same fields as a GET, the project list included (a null there crashed the page).
+func TestSettingsSaveAnswerMatchesRead(t *testing.T) {
+	ts, _, _, _ := settingsServer(t)
+	res, b := do(t, ts, "PUT", "/api/settings", map[string]any{"backup": map[string]any{"keep": 7}})
+	if res.StatusCode != 200 {
+		t.Fatalf("%d %s", res.StatusCode, b)
+	}
+	var o settingsResp
+	json.Unmarshal(b, &o)
+	if !slices.Equal(o.Projects, []string{"alpha", "beta"}) || strings.Contains(string(b), `"projects":null`) {
+		t.Errorf("project list missing from the save answer: %s", b)
+	}
+	if o.Backup.Keep != 7 || o.Backup.Projects == nil {
+		t.Errorf("answer = %s", b)
+	}
+}

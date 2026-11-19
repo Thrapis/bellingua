@@ -53,18 +53,18 @@ export default function Home() {
         <Languages className="size-6" />
         <h1 className="text-xl font-semibold tracking-tight">bellingua</h1>
         <div className="flex-1" />
-        <ThemeToggle />
-        <Button asChild variant="ghost" size="icon" aria-label="Settings" title="Settings">
-          <Link href="/settings">
-            <Settings />
-          </Link>
-        </Button>
         <Button variant="outline" onClick={() => setCopying(true)}>
           <CloudDownload /> Copy from Crowdin
         </Button>
         <Button onClick={() => setCreating(true)}>
           <Plus /> New project
         </Button>
+        <Button asChild variant="ghost" size="icon" aria-label="Settings" title="Settings">
+          <Link href="/settings">
+            <Settings />
+          </Link>
+        </Button>
+        <ThemeToggle />
       </header>
 
       <BackupCard />
