@@ -181,7 +181,9 @@ func (s *Server) startPull(w http.ResponseWriter, p *store.Project, l store.Link
 	}
 	return s.startOnce(w, "crowdin-pull", p, func(ctx context.Context, pr Progress) (any, error) {
 		defer s.tm.Invalidate(p.ID)
-		snap, err := c.Pull(ctx, l.RemoteID, l.TargetLang, func(step string) { pr.Say("Crowdin: %s", step) })
+		snap, err := c.Pull(ctx, l.RemoteID, l.TargetLang, func(step string, done, total int) {
+			pr.Update("", "Crowdin: "+step, int64(done), int64(total), 0)
+		})
 		if err != nil {
 			return nil, crowdinFail(err)
 		}

@@ -28,6 +28,8 @@ type Client struct {
 	Base  string // API root including /api/v2; DefaultBase when empty
 	Token string // personal access token (read-only scopes are enough)
 	HTTP  *http.Client
+	// Page, when set, is told the running item count after each page of a list.
+	Page func(items int)
 	// Sleep waits out a 429; tests replace it.
 	Sleep func(context.Context, time.Duration) error
 }
@@ -128,6 +130,7 @@ func (c *Client) get(ctx context.Context, u string) ([]byte, error) {
 
 // list walks every page of a collection, calling fn on each item's "data".
 func (c *Client) list(ctx context.Context, path string, q url.Values, fn func(json.RawMessage) error) error {
+	total := 0
 	for offset := 0; ; offset += pageSize {
 		v := url.Values{}
 		for k, s := range q {
@@ -151,6 +154,10 @@ func (c *Client) list(ctx context.Context, path string, q url.Values, fn func(js
 			if err := fn(it.Data); err != nil {
 				return err
 			}
+		}
+		total += len(page.Data)
+		if c.Page != nil {
+			c.Page(total)
 		}
 		if len(page.Data) < pageSize {
 			return nil
@@ -306,4 +313,31 @@ func BaseForOrg(org string) (string, error) {
 		return "", fmt.Errorf("organization %q is not a valid Crowdin Enterprise domain name", org)
 	}
 	return "https://" + org + ".api.crowdin.com/api/v2", nil
+}
+
+// Stat is Crowdin's own tally of a language: strings (phrases) in total,
+// translated and approved. It is only an estimate for progress bars.
+type Stat struct{ Strings, Translated, Approved int }
+
+// LanguageStat reads the project's progress for one language. It needs the
+// extra read scope "Project status: progress", so callers treat a failure as
+// "total unknown", never as a failed pull.
+func (c *Client) LanguageStat(ctx context.Context, project int64, lang string) (Stat, error) {
+	var st Stat
+	err := c.list(ctx, fmt.Sprintf("/projects/%d/languages/progress", project), url.Values{"languageIds": {lang}}, func(raw json.RawMessage) error {
+		var p struct {
+			LanguageID string `json:"languageId"`
+			Phrases    struct {
+				Total, Translated, Approved int
+			} `json:"phrases"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if p.LanguageID == lang {
+			st = Stat{p.Phrases.Total, p.Phrases.Translated, p.Phrases.Approved}
+		}
+		return nil
+	})
+	return st, err
 }

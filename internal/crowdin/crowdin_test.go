@@ -202,3 +202,36 @@ func TestPullSnapshot(t *testing.T) {
 		t.Errorf("context lost: %+v", f.Units[0])
 	}
 }
+
+func TestPullReportsTotals(t *testing.T) {
+	c := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/projects/7":
+			fmt.Fprint(w, `{"data":{"id":7,"name":"n","identifier":"n","sourceLanguageId":"en","targetLanguageIds":["be"]}}`)
+		case "/api/v2/projects/7/languages/progress":
+			if r.URL.Query().Get("languageIds") != "be" {
+				t.Errorf("languageIds = %q", r.URL.Query().Get("languageIds"))
+			}
+			fmt.Fprint(w, `{"data":[{"data":{"languageId":"be","phrases":{"total":2,"translated":1,"approved":0}}}]}`)
+		case "/api/v2/projects/7/files":
+			fmt.Fprint(w, `{"data":[]}`)
+		case "/api/v2/projects/7/strings":
+			// Crowdin says 2, but three come: the bar must not overflow.
+			fmt.Fprint(w, `{"data":[{"data":{"id":1,"fileId":3,"text":"a"}},{"data":{"id":2,"fileId":3,"text":"b"}},{"data":{"id":3,"fileId":3,"text":"c"}}]}`)
+		default:
+			fmt.Fprint(w, `{"data":[]}`)
+		}
+	})
+	var got []string
+	_, err := c.Pull(context.Background(), 7, "", func(step string, done, total int) {
+		if total > 0 {
+			got = append(got, fmt.Sprintf("%s %d/%d", step, done, total))
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0] != "strings 3/3" || got[1] != "translations 0/1" {
+		t.Errorf("progress = %v", got)
+	}
+}

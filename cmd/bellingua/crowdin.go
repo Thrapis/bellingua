@@ -81,7 +81,11 @@ func cmdCrowdin(ctx context.Context, args []string) error {
 	}
 
 	c := &crowdin.Client{Base: nonEmpty(link.BaseURL, e.cfg.Crowdin.BaseURL), Token: e.cfg.Crowdin.Token}
-	snap, err := c.Pull(ctx, link.RemoteID, link.TargetLang, func(step string) { e.log.Info("crowdin", "reading", step) })
+	snap, err := c.Pull(ctx, link.RemoteID, link.TargetLang, func(step string, done, total int) {
+		if done == 0 {
+			e.log.Info("crowdin", "reading", step)
+		}
+	})
 	if err != nil {
 		return err
 	}

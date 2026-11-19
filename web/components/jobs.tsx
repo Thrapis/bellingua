@@ -93,7 +93,9 @@ export function RunningJobs({ project, hide }: { project?: number; hide?: Job["k
             <span className="w-40 shrink-0 font-medium">{kindLabel[j.kind]}</span>
             <Progress value={pct} className="h-1.5 flex-1" />
             <span className="shrink-0 whitespace-nowrap text-right tabular-nums text-muted-foreground">
-              {j.total ? `${j.done.toLocaleString()} / ${j.total.toLocaleString()}` : (j.message ?? "…")}
+              {j.total
+                ? `${j.kind === "crowdin-pull" && j.message ? `${j.message} ` : ""}${j.done.toLocaleString()} / ${j.total.toLocaleString()}`
+                : (j.message ?? "…")}
             </span>
             <Button variant="ghost" size="icon" className="size-6" onClick={() => api.cancelJob(j.id)} title="Cancel">
               <X className="size-3.5" />

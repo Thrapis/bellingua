@@ -22,10 +22,10 @@ type Snapshot struct {
 
 // Pull reads a project's files, strings, and the translations and approvals
 // into one target language. lang may be empty when the project has exactly one.
-func (c *Client) Pull(ctx context.Context, remoteID int64, lang string, progress func(step string)) (Snapshot, error) {
+func (c *Client) Pull(ctx context.Context, remoteID int64, lang string, progress func(step string, done, total int)) (Snapshot, error) {
 	say := func(s string) {
 		if progress != nil {
-			progress(s)
+			progress(s, 0, 0)
 		}
 	}
 	var snap Snapshot
@@ -43,27 +43,40 @@ func (c *Client) Pull(ctx context.Context, remoteID int64, lang string, progress
 	}
 	snap.Lang = lang
 
+	// Totals for the progress bar; unknown (0) when the token lacks the scope.
+	stat, _ := c.LanguageStat(ctx, remoteID, lang)
+	page := func(step string, total int) func(int) {
+		return func(n int) {
+			if progress != nil {
+				progress(step, n, max(total, n))
+			}
+		}
+	}
 	say("files")
 	files, err := c.Files(ctx, remoteID)
 	if err != nil {
 		return snap, err
 	}
+	c.Page = page("strings", stat.Strings)
 	say("strings")
 	strs, err := c.Strings(ctx, remoteID)
 	if err != nil {
 		return snap, err
 	}
+	c.Page = page("translations", stat.Translated)
 	say("translations")
 	tr, err := c.Translations(ctx, remoteID, lang)
 	if err != nil {
 		return snap, err
 	}
+	c.Page = page("approvals", stat.Approved)
 	say("approvals")
 	ap, err := c.Approved(ctx, remoteID, lang)
 	if err != nil {
 		return snap, err
 	}
 
+	c.Page = nil
 	byFile := map[int64][]String{}
 	for _, s := range strs {
 		snap.Strings++
